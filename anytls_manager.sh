@@ -1,0 +1,314 @@
+#!/bin/bash
+# =====================================================================
+# anytls_manager.sh - AnyTLS-Go 服务端一键安装与管理脚本
+# 上游项目: https://github.com/anytls/anytls-go
+# 用法: sudo bash anytls_manager.sh install
+# 安装后可使用: anytls {install|update|uninstall|start|stop|restart|status|log|qr|help}
+# 支持架构: amd64 / arm64；需要 systemd
+# =====================================================================
+
+set -u
+
+VERSION="${ANYTLS_VERSION:-0.0.8}"
+REPO="anytls/anytls-go"
+BIN_PATH="/usr/local/bin/anytls-server"
+CONF_DIR="/etc/anytls"
+CONF_FILE="${CONF_DIR}/config.env"
+SERVICE="anytls"
+UNIT_FILE="/etc/systemd/system/${SERVICE}.service"
+SCRIPT_DST="/usr/local/sbin/anytls"
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+info() { echo -e "${GREEN}[INFO]${NC} $*"; }
+warn() { echo -e "${YELLOW}[WARN]${NC} $*" >&2; }
+err()  { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
+
+need_root()      { [[ $EUID -eq 0 ]] || err "请使用 root 或 sudo 运行"; }
+need_systemd()   { [[ -d /run/systemd/system ]] || err "当前系统不支持 systemd"; }
+need_installed() { [[ -f "$BIN_PATH" && -f "$CONF_FILE" ]] || err "未安装，请先执行 install"; }
+
+# ---------- 工具函数 ----------
+get_arch() {
+    case "$(uname -m)" in
+        x86_64|amd64)  echo "amd64" ;;
+        aarch64|arm64) echo "arm64" ;;
+        *) err "不支持的架构: $(uname -m)（仅支持 amd64 / arm64）" ;;
+    esac
+}
+
+valid_port()   { [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 65535 )); }
+valid_pass()   { [[ "$1" =~ ^[A-Za-z0-9]{6,64}$ ]]; }
+port_in_use()  { ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$1$"; }
+rand_str()     { tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$1"; }
+get_ip()       { curl -s4 --max-time 5 ifconfig.me || curl -s4 --max-time 5 ip.sb || echo "服务器IP"; }
+load_conf()    { [[ -f "$CONF_FILE" ]] && source "$CONF_FILE"; }
+
+# ---------- 依赖 ----------
+install_deps() {
+    info "安装依赖（wget / unzip / curl / qrencode）..."
+    if command -v apt-get &>/dev/null; then
+        apt-get update -y >/dev/null
+        apt-get install -y wget unzip curl qrencode iproute2 >/dev/null 2>&1 \
+            || apt-get install -y wget unzip curl iproute2 >/dev/null
+    elif command -v dnf &>/dev/null; then
+        dnf install -y wget unzip curl qrencode iproute >/dev/null 2>&1 \
+            || dnf install -y wget unzip curl iproute >/dev/null
+    elif command -v yum &>/dev/null; then
+        yum install -y wget unzip curl qrencode iproute >/dev/null 2>&1 \
+            || yum install -y wget unzip curl iproute >/dev/null
+    elif command -v pacman &>/dev/null; then
+        pacman -Sy --noconfirm --needed wget unzip curl qrencode iproute2 >/dev/null 2>&1 || true
+    else
+        warn "未识别的包管理器，请确保已安装 wget、unzip、curl"
+    fi
+    for c in wget unzip curl; do
+        command -v "$c" &>/dev/null || err "缺少依赖: $c"
+    done
+    command -v qrencode &>/dev/null || warn "qrencode 未安装，二维码功能不可用，仍可使用连接链接"
+}
+
+# ---------- 下载程序 ----------
+download_server() {
+    local arch url tmp found
+    arch=$(get_arch)
+    url="https://github.com/${REPO}/releases/download/v${VERSION}/anytls_${VERSION}_linux_${arch}.zip"
+    tmp=$(mktemp -d)
+    info "下载 anytls-go v${VERSION} (linux/${arch})..."
+    curl -fL --retry 3 --max-time 300 -o "$tmp/pkg.zip" "$url" \
+        || { rm -rf "$tmp"; err "下载失败: $url"; }
+    unzip -qo "$tmp/pkg.zip" -d "$tmp/out" || { rm -rf "$tmp"; err "解压失败"; }
+
+    found=$(find "$tmp/out" -type f -iname '*anytls*' ! -name '*.zip' ! -name '*.md' ! -name '*.txt' | grep -i 'server' | head -1)
+    [[ -n "$found" ]] || found=$(find "$tmp/out" -type f -iname '*anytls*' ! -name '*.zip' ! -name '*.md' ! -name '*.txt' | head -1)
+    [[ -n "$found" ]] || { rm -rf "$tmp"; err "压缩包中未找到 anytls 可执行文件"; }
+
+    install -m 755 "$found" "$BIN_PATH"
+    rm -rf "$tmp"
+}
+
+# ---------- 防火墙 ----------
+open_firewall() {
+    if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
+        ufw allow "$1/tcp" >/dev/null
+    elif command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewalld; then
+        firewall-cmd --permanent --add-port="$1/tcp" >/dev/null
+        firewall-cmd --reload >/dev/null
+    else
+        warn "未检测到活动防火墙，请确认端口 $1 已放行（云服务器需检查安全组）"
+    fi
+}
+
+close_firewall() {
+    local p=$1
+    if command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
+        ufw delete allow "$p/tcp" >/dev/null 2>&1
+    elif command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewalld; then
+        firewall-cmd --permanent --remove-port="$p/tcp" >/dev/null 2>&1
+        firewall-cmd --reload >/dev/null 2>&1
+    fi
+}
+
+# ---------- 配置与服务 ----------
+save_conf() {   # 参数: 端口 密码
+    mkdir -p "$CONF_DIR"; chmod 700 "$CONF_DIR"
+    umask 077
+    printf 'PORT=%s\nPASSWORD=%s\nVERSION=%s\n' "$1" "$2" "$VERSION" > "$CONF_FILE"
+    chmod 600 "$CONF_FILE"
+}
+
+write_unit() {
+    load_conf
+    cat > "$UNIT_FILE" <<EOF
+[Unit]
+Description=AnyTLS-Go server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=${BIN_PATH} -l 0.0.0.0:${PORT} -p ${PASSWORD}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+}
+
+ask_port() {
+    local p
+    while true; do
+        read -rp "请输入监听端口 [默认 8443]: " p
+        p=${p:-8443}
+        valid_port "$p" || { warn "端口需为 1-65535 之间的数字"; continue; }
+        port_in_use "$p" && { warn "端口 $p 已被占用，请更换"; continue; }
+        echo "$p"; return
+    done
+}
+
+ask_pass() {
+    local pw
+    while true; do
+        read -rp "请输入连接密码 [回车随机生成，仅限字母数字 6-64 位]: " pw
+        pw=${pw:-$(rand_str 16)}
+        valid_pass "$pw" && { echo "$pw"; return; }
+        warn "密码仅允许字母和数字，长度 6-64"
+    done
+}
+
+restart_and_check() {
+    systemctl enable "$SERVICE" >/dev/null 2>&1
+    systemctl restart "$SERVICE"
+    sleep 2
+    systemctl is-active --quiet "$SERVICE" || err "服务启动失败，请执行: anytls log"
+}
+
+print_info() {
+    load_conf
+    local ip; ip=$(get_ip)
+    echo "--------------------------------------------"
+    echo " 服务器 IP : ${ip}"
+    echo " 端口      : ${PORT}"
+    echo " 密码      : ${PASSWORD}"
+    echo " 版本      : v${VERSION}"
+    echo " 连接链接  : anytls://${PASSWORD}@${ip}:${PORT}/?insecure=1"
+    echo "--------------------------------------------"
+    echo " 注意：服务端使用自签名证书，客户端需开启“允许不安全连接”或“跳过证书验证”。"
+}
+
+# ---------- 子命令 ----------
+cmd_install() {
+    need_root; need_systemd
+    install_deps
+    download_server
+
+    if [[ -f "$CONF_FILE" ]]; then
+        info "检测到已安装，保留原端口与密码，仅更新程序"
+        load_conf
+        save_conf "$PORT" "$PASSWORD"
+        write_unit
+        restart_and_check
+        info "更新完成，当前版本: v${VERSION}"
+        print_info
+        return
+    fi
+
+    PORT=$(ask_port)
+    PASSWORD=$(ask_pass)
+    save_conf "$PORT" "$PASSWORD"
+    write_unit
+
+    if [[ "$(readlink -f "$0")" != "$SCRIPT_DST" ]]; then
+        install -m 755 "$0" "$SCRIPT_DST"
+    fi
+
+    restart_and_check
+    open_firewall "$PORT"
+    info "安装完成！"
+    print_info
+    echo " 管理命令  : anytls {start|stop|restart|status|update|log|qr|uninstall}"
+}
+
+cmd_update() {
+    need_root; need_systemd; need_installed
+    load_conf
+    local old=${VERSION:-未知}
+    install_deps
+    download_server
+    save_conf "$PORT" "$PASSWORD"
+    restart_and_check
+    info "已从 v${old} 更新到 v${VERSION}"
+}
+
+cmd_ctl() {   # 参数: start | stop | restart
+    need_root; need_systemd; need_installed
+    systemctl "$1" "$SERVICE" || err "执行 $1 失败，请执行: anytls log"
+    info "服务已 $1"
+}
+
+cmd_status() {
+    need_systemd
+    need_installed
+    load_conf
+    local st="已停止"
+    systemctl is-active --quiet "$SERVICE" && st="运行中"
+    echo "--------------------------------------------"
+    echo " 服务状态 : $st"
+    echo " 程序版本 : v${VERSION}"
+    echo " 监听端口 : ${PORT}"
+    echo "--------------------------------------------"
+}
+
+cmd_log() {
+    need_root
+    if [[ $# -eq 0 ]]; then
+        journalctl -u "$SERVICE" -n 100 --no-pager
+    else
+        journalctl -u "$SERVICE" --no-pager "$@"
+    fi
+}
+
+cmd_qr() {
+    need_root; need_installed
+    load_conf
+    read -rsp "请输入连接密码以确认身份: " input; echo
+    [[ "$input" == "$PASSWORD" ]] || err "密码错误"
+    local ip uri; ip=$(get_ip)
+    uri="anytls://${PASSWORD}@${ip}:${PORT}/?insecure=1"
+    echo "连接链接: ${uri}"
+    if command -v qrencode &>/dev/null; then
+        qrencode -t ANSIUTF8 "$uri"
+    else
+        warn "未安装 qrencode，无法显示二维码"
+    fi
+}
+
+cmd_uninstall() {
+    need_root; need_systemd
+    read -rp "确认卸载 anytls-go（配置将被删除）? [y/N] " ans
+    [[ "$ans" =~ ^[Yy]$ ]] || { info "已取消"; return; }
+    load_conf 2>/dev/null
+    systemctl disable --now "$SERVICE" >/dev/null 2>&1
+    [[ -n "${PORT:-}" ]] && close_firewall "$PORT"
+    rm -f "$UNIT_FILE"
+    systemctl daemon-reload
+    rm -f "$BIN_PATH" "$SCRIPT_DST"
+    rm -rf "$CONF_DIR"
+    info "anytls-go 已卸载"
+}
+
+usage() {
+    cat <<EOF
+anytls_manager - AnyTLS-Go 服务端管理脚本
+
+用法:
+  anytls install        安装（已安装则仅更新程序，保留配置）
+  anytls update         更新到指定版本（默认 v${VERSION}）
+  anytls start          启动服务
+  anytls stop           停止服务
+  anytls restart        重启服务
+  anytls status         查看状态
+  anytls log [参数]     查看日志，可附加 journalctl 参数，如 -n 200
+  anytls qr             输出连接链接与二维码（需输入密码）
+  anytls uninstall      卸载
+  anytls help           显示本帮助
+
+首次运行可直接: sudo bash anytls_manager.sh install
+EOF
+}
+
+# ---------- 入口 ----------
+case "${1:-help}" in
+    install)   cmd_install ;;
+    update)    cmd_update ;;
+    start)     cmd_ctl start ;;
+    stop)      cmd_ctl stop ;;
+    restart)   cmd_ctl restart ;;
+    status)    cmd_status ;;
+    log)       shift; cmd_log "$@" ;;
+    qr)        cmd_qr ;;
+    uninstall) cmd_uninstall ;;
+    help|-h|--help) usage ;;
+    *)         usage; exit 1 ;;
+esac

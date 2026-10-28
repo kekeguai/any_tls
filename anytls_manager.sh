@@ -9,7 +9,7 @@
 
 set -u
 
-VERSION="${ANYTLS_VERSION:-0.0.9}"       # 目标程序版本，可用环境变量覆盖
+VERSION="${ANYTLS_VERSION:-0.0.8}"       # 目标程序版本，可用环境变量覆盖
 REPO="anytls/anytls-go"
 BIN_PATH="/usr/local/bin/anytls-server"
 CONF_DIR="/etc/anytls"

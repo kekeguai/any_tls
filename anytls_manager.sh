@@ -9,7 +9,7 @@
 
 set -u
 
-VERSION="${ANYTLS_VERSION:-0.0.8}"       # 目标程序版本，可用环境变量覆盖
+VERSION="${ANYTLS_VERSION:-0.0.9}"       # 目标程序版本，可用环境变量覆盖
 REPO="anytls/anytls-go"
 BIN_PATH="/usr/local/bin/anytls-server"
 CONF_DIR="/etc/anytls"
@@ -46,23 +46,30 @@ get_ip()      { curl -s4 --max-time 5 ifconfig.me || curl -s4 --max-time 5 ip.sb
 load_conf()   { [[ -f "$CONF_FILE" ]] && source "$CONF_FILE"; }
 
 # ---------- 依赖 ----------
-ensure_qrencode() {
+# 安装 qrencode，显示真实错误信息，成功返回 0
+install_qrencode() {
     command -v qrencode &>/dev/null && return 0
     info "安装 qrencode（二维码工具）..."
     if command -v apt-get &>/dev/null; then
-        apt-get install -y qrencode >/dev/null 2>&1
+        apt-get install -y qrencode
     elif command -v dnf &>/dev/null; then
-        dnf install -y qrencode >/dev/null 2>&1
+        dnf install -y qrencode
     elif command -v yum &>/dev/null; then
-        yum install -y qrencode >/dev/null 2>&1
+        if ! yum install -y qrencode; then
+            warn "yum 未找到 qrencode，CentOS / RHEL 系通常需要先启用 EPEL："
+            warn "  sudo yum install -y epel-release"
+            yum install -y qrencode
+        fi
     elif command -v pacman &>/dev/null; then
-        pacman -S --noconfirm --needed qrencode >/dev/null 2>&1
+        pacman -S --noconfirm --needed qrencode
+    else
+        warn "未识别的包管理器，无法自动安装 qrencode"
     fi
     command -v qrencode &>/dev/null
 }
 
 install_deps() {
-    info "安装依赖（wget / unzip / curl / iproute / qrencode）..."
+    info "安装基础依赖（wget / unzip / curl / iproute）..."
     if command -v apt-get &>/dev/null; then
         apt-get update -y >/dev/null
         apt-get install -y wget unzip curl iproute2 >/dev/null
@@ -78,7 +85,7 @@ install_deps() {
     for c in wget unzip curl; do
         command -v "$c" &>/dev/null || err "缺少依赖: $c"
     done
-    ensure_qrencode || warn "qrencode 安装失败，二维码功能暂不可用，仍可使用连接链接"
+    install_qrencode || warn "qrencode 安装失败，二维码将无法显示，但连接链接仍会输出"
 }
 
 # ---------- 下载程序 ----------
@@ -98,6 +105,14 @@ download_server() {
 
     install -m 755 "$found" "$BIN_PATH"
     rm -rf "$tmp"
+}
+
+# 每次 install 都同步管理脚本本体，保证 anytls 命令与最新脚本一致
+sync_self() {
+    local self; self=$(readlink -f "$0")
+    if [[ -f "$self" && "$self" != "$SCRIPT_DST" ]]; then
+        install -m 755 "$self" "$SCRIPT_DST"
+    fi
 }
 
 # ---------- 防火墙 ----------
@@ -205,7 +220,7 @@ print_info() {
     echo " 端口      : ${PORT}"
     echo " 密码      : ${PASSWORD}"
     echo " 节点名称  : ${NODE_NAME:-AnyTLS}"
-    echo " 程序版本  : v${VERSION}"
+    echo " 程序版本  : v${INSTALLED_VERSION:-$VERSION}"
     echo "--------------------------------------------"
     echo " 注意：服务端使用自签名证书，客户端需开启“允许不安全连接”或“跳过证书验证”。"
 }
@@ -215,19 +230,24 @@ show_qr() {
     echo
     echo "连接链接: ${uri}"
     echo
-    if ensure_qrencode; then
-        echo "请使用 NekoBox / Shadowrocket 扫描下方二维码："
-        echo
-        qrencode -t ANSIUTF8 -m 1 "$uri"
-        echo
-        if qrencode -o "$QR_PNG" -s 8 -m 2 "$uri" 2>/dev/null; then
-            chmod 600 "$QR_PNG"
-            info "二维码图片已保存: ${QR_PNG}（可用 scp 下载后扫码）"
-        fi
-    else
-        warn "qrencode 不可用，无法生成二维码，请手动导入上面的连接链接"
+
+    if ! command -v qrencode &>/dev/null; then
+        warn "qrencode 未安装，尝试重新安装..."
+        install_qrencode || {
+            warn "仍无法安装 qrencode，二维码未生成。请手动执行: sudo apt install -y qrencode（或对应系统命令），然后运行 anytls qr"
+            return 0
+        }
     fi
+
+    echo "请使用 NekoBox / Shadowrocket 扫描下方二维码："
     echo
+    qrencode -t ANSIUTF8 -m 1 "$uri" || warn "终端二维码输出失败"
+    echo
+
+    if qrencode -o "$QR_PNG" -s 8 -m 2 "$uri" 2>/dev/null; then
+        chmod 600 "$QR_PNG"
+        info "二维码图片已保存: ${QR_PNG}（终端显示异常时，可用 scp 下载后扫码）"
+    fi
     warn "若扫码无法导入，请确认客户端版本支持 AnyTLS，并开启“允许不安全连接”。"
 }
 
@@ -236,6 +256,7 @@ cmd_install() {
     need_root; need_systemd
     install_deps
     download_server
+    sync_self
 
     if [[ -f "$CONF_FILE" ]]; then
         info "检测到已安装，保留原端口、密码与节点名称，仅更新程序"
@@ -256,10 +277,6 @@ cmd_install() {
     save_conf "$port" "$pass" "$name"
     write_unit
 
-    if [[ "$(readlink -f "$0")" != "$SCRIPT_DST" ]]; then
-        install -m 755 "$0" "$SCRIPT_DST"
-    fi
-
     restart_and_check
     open_firewall "$port"
     info "安装完成！"
@@ -274,6 +291,7 @@ cmd_update() {
     local old=${INSTALLED_VERSION:-未知}
     install_deps
     download_server
+    sync_self
     save_conf "$PORT" "$PASSWORD" "${NODE_NAME:-AnyTLS}"
     write_unit
     restart_and_check

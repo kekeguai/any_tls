@@ -1,19 +1,20 @@
 #!/bin/bash
 # =====================================================================
-# anytls_manager.sh - AnyTLS-Go 服务端一键安装与管理脚本
+# anytls_manager.sh - AnyTLS-Go 服务端一键安装与管理脚本（含二维码）
 # 上游项目: https://github.com/anytls/anytls-go
 # 用法: sudo bash anytls_manager.sh install
-# 安装后可使用: anytls {install|update|uninstall|start|stop|restart|status|log|qr|help}
+# 安装后可使用: anytls {install|update|start|stop|restart|status|log|qr|uninstall|help}
 # 支持架构: amd64 / arm64；需要 systemd
 # =====================================================================
 
 set -u
 
-VERSION="${ANYTLS_VERSION:-0.0.8}"
+VERSION="${ANYTLS_VERSION:-0.0.8}"       # 目标程序版本，可用环境变量覆盖
 REPO="anytls/anytls-go"
 BIN_PATH="/usr/local/bin/anytls-server"
 CONF_DIR="/etc/anytls"
 CONF_FILE="${CONF_DIR}/config.env"
+QR_PNG="${CONF_DIR}/anytls-qr.png"
 SERVICE="anytls"
 UNIT_FILE="/etc/systemd/system/${SERVICE}.service"
 SCRIPT_DST="/usr/local/sbin/anytls"
@@ -36,35 +37,48 @@ get_arch() {
     esac
 }
 
-valid_port()   { [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 65535 )); }
-valid_pass()   { [[ "$1" =~ ^[A-Za-z0-9]{6,64}$ ]]; }
-port_in_use()  { ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$1$"; }
-rand_str()     { tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$1"; }
-get_ip()       { curl -s4 --max-time 5 ifconfig.me || curl -s4 --max-time 5 ip.sb || echo "服务器IP"; }
-load_conf()    { [[ -f "$CONF_FILE" ]] && source "$CONF_FILE"; }
+valid_port()  { [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 65535 )); }
+valid_pass()  { [[ "$1" =~ ^[A-Za-z0-9]{6,64}$ ]]; }
+valid_name()  { [[ "$1" =~ ^[A-Za-z0-9_-]{1,32}$ ]]; }
+port_in_use() { ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$1$"; }
+rand_str()    { tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$1"; }
+get_ip()      { curl -s4 --max-time 5 ifconfig.me || curl -s4 --max-time 5 ip.sb || echo "服务器IP"; }
+load_conf()   { [[ -f "$CONF_FILE" ]] && source "$CONF_FILE"; }
 
 # ---------- 依赖 ----------
+ensure_qrencode() {
+    command -v qrencode &>/dev/null && return 0
+    info "安装 qrencode（二维码工具）..."
+    if command -v apt-get &>/dev/null; then
+        apt-get install -y qrencode >/dev/null 2>&1
+    elif command -v dnf &>/dev/null; then
+        dnf install -y qrencode >/dev/null 2>&1
+    elif command -v yum &>/dev/null; then
+        yum install -y qrencode >/dev/null 2>&1
+    elif command -v pacman &>/dev/null; then
+        pacman -S --noconfirm --needed qrencode >/dev/null 2>&1
+    fi
+    command -v qrencode &>/dev/null
+}
+
 install_deps() {
-    info "安装依赖（wget / unzip / curl / qrencode）..."
+    info "安装依赖（wget / unzip / curl / iproute / qrencode）..."
     if command -v apt-get &>/dev/null; then
         apt-get update -y >/dev/null
-        apt-get install -y wget unzip curl qrencode iproute2 >/dev/null 2>&1 \
-            || apt-get install -y wget unzip curl iproute2 >/dev/null
+        apt-get install -y wget unzip curl iproute2 >/dev/null
     elif command -v dnf &>/dev/null; then
-        dnf install -y wget unzip curl qrencode iproute >/dev/null 2>&1 \
-            || dnf install -y wget unzip curl iproute >/dev/null
+        dnf install -y wget unzip curl iproute >/dev/null
     elif command -v yum &>/dev/null; then
-        yum install -y wget unzip curl qrencode iproute >/dev/null 2>&1 \
-            || yum install -y wget unzip curl iproute >/dev/null
+        yum install -y wget unzip curl iproute >/dev/null
     elif command -v pacman &>/dev/null; then
-        pacman -Sy --noconfirm --needed wget unzip curl qrencode iproute2 >/dev/null 2>&1 || true
+        pacman -Sy --noconfirm --needed wget unzip curl iproute2 >/dev/null
     else
         warn "未识别的包管理器，请确保已安装 wget、unzip、curl"
     fi
     for c in wget unzip curl; do
         command -v "$c" &>/dev/null || err "缺少依赖: $c"
     done
-    command -v qrencode &>/dev/null || warn "qrencode 未安装，二维码功能不可用，仍可使用连接链接"
+    ensure_qrencode || warn "qrencode 安装失败，二维码功能暂不可用，仍可使用连接链接"
 }
 
 # ---------- 下载程序 ----------
@@ -109,10 +123,12 @@ close_firewall() {
 }
 
 # ---------- 配置与服务 ----------
-save_conf() {   # 参数: 端口 密码
+# 参数: 端口 密码 节点名称
+save_conf() {
     mkdir -p "$CONF_DIR"; chmod 700 "$CONF_DIR"
     umask 077
-    printf 'PORT=%s\nPASSWORD=%s\nVERSION=%s\n' "$1" "$2" "$VERSION" > "$CONF_FILE"
+    printf 'PORT=%s\nPASSWORD=%s\nNODE_NAME=%s\nINSTALLED_VERSION=%s\n' \
+        "$1" "$2" "$3" "$VERSION" > "$CONF_FILE"
     chmod 600 "$CONF_FILE"
 }
 
@@ -136,6 +152,13 @@ EOF
     systemctl daemon-reload
 }
 
+restart_and_check() {
+    systemctl enable "$SERVICE" >/dev/null 2>&1
+    systemctl restart "$SERVICE"
+    sleep 2
+    systemctl is-active --quiet "$SERVICE" || err "服务启动失败，请执行: anytls log"
+}
+
 ask_port() {
     local p
     while true; do
@@ -150,18 +173,28 @@ ask_port() {
 ask_pass() {
     local pw
     while true; do
-        read -rp "请输入连接密码 [回车随机生成，仅限字母数字 6-64 位]: " pw
+        read -rp "请输入连接密码 [回车随机生成，仅字母数字 6-64 位]: " pw
         pw=${pw:-$(rand_str 16)}
         valid_pass "$pw" && { echo "$pw"; return; }
         warn "密码仅允许字母和数字，长度 6-64"
     done
 }
 
-restart_and_check() {
-    systemctl enable "$SERVICE" >/dev/null 2>&1
-    systemctl restart "$SERVICE"
-    sleep 2
-    systemctl is-active --quiet "$SERVICE" || err "服务启动失败，请执行: anytls log"
+ask_name() {
+    local n
+    while true; do
+        read -rp "请输入节点名称（客户端中显示）[默认 AnyTLS]: " n
+        n=${n:-AnyTLS}
+        valid_name "$n" && { echo "$n"; return; }
+        warn "节点名称仅允许字母、数字、_ 和 -，1-32 位"
+    done
+}
+
+# ---------- 连接信息与二维码 ----------
+build_uri() {
+    load_conf
+    local ip; ip=$(get_ip)
+    echo "anytls://${PASSWORD}@${ip}:${PORT}/?insecure=1#${NODE_NAME:-AnyTLS}"
 }
 
 print_info() {
@@ -171,10 +204,31 @@ print_info() {
     echo " 服务器 IP : ${ip}"
     echo " 端口      : ${PORT}"
     echo " 密码      : ${PASSWORD}"
-    echo " 版本      : v${VERSION}"
-    echo " 连接链接  : anytls://${PASSWORD}@${ip}:${PORT}/?insecure=1"
+    echo " 节点名称  : ${NODE_NAME:-AnyTLS}"
+    echo " 程序版本  : v${VERSION}"
     echo "--------------------------------------------"
     echo " 注意：服务端使用自签名证书，客户端需开启“允许不安全连接”或“跳过证书验证”。"
+}
+
+show_qr() {
+    local uri; uri=$(build_uri)
+    echo
+    echo "连接链接: ${uri}"
+    echo
+    if ensure_qrencode; then
+        echo "请使用 NekoBox / Shadowrocket 扫描下方二维码："
+        echo
+        qrencode -t ANSIUTF8 -m 1 "$uri"
+        echo
+        if qrencode -o "$QR_PNG" -s 8 -m 2 "$uri" 2>/dev/null; then
+            chmod 600 "$QR_PNG"
+            info "二维码图片已保存: ${QR_PNG}（可用 scp 下载后扫码）"
+        fi
+    else
+        warn "qrencode 不可用，无法生成二维码，请手动导入上面的连接链接"
+    fi
+    echo
+    warn "若扫码无法导入，请确认客户端版本支持 AnyTLS，并开启“允许不安全连接”。"
 }
 
 # ---------- 子命令 ----------
@@ -184,19 +238,22 @@ cmd_install() {
     download_server
 
     if [[ -f "$CONF_FILE" ]]; then
-        info "检测到已安装，保留原端口与密码，仅更新程序"
+        info "检测到已安装，保留原端口、密码与节点名称，仅更新程序"
         load_conf
-        save_conf "$PORT" "$PASSWORD"
+        save_conf "$PORT" "$PASSWORD" "${NODE_NAME:-AnyTLS}"
         write_unit
         restart_and_check
         info "更新完成，当前版本: v${VERSION}"
         print_info
+        show_qr
         return
     fi
 
-    PORT=$(ask_port)
-    PASSWORD=$(ask_pass)
-    save_conf "$PORT" "$PASSWORD"
+    local port pass name
+    port=$(ask_port)
+    pass=$(ask_pass)
+    name=$(ask_name)
+    save_conf "$port" "$pass" "$name"
     write_unit
 
     if [[ "$(readlink -f "$0")" != "$SCRIPT_DST" ]]; then
@@ -204,19 +261,21 @@ cmd_install() {
     fi
 
     restart_and_check
-    open_firewall "$PORT"
+    open_firewall "$port"
     info "安装完成！"
     print_info
-    echo " 管理命令  : anytls {start|stop|restart|status|update|log|qr|uninstall}"
+    show_qr
+    echo " 管理命令 : anytls {start|stop|restart|status|update|log|qr|uninstall}"
 }
 
 cmd_update() {
     need_root; need_systemd; need_installed
     load_conf
-    local old=${VERSION:-未知}
+    local old=${INSTALLED_VERSION:-未知}
     install_deps
     download_server
-    save_conf "$PORT" "$PASSWORD"
+    save_conf "$PORT" "$PASSWORD" "${NODE_NAME:-AnyTLS}"
+    write_unit
     restart_and_check
     info "已从 v${old} 更新到 v${VERSION}"
 }
@@ -228,15 +287,15 @@ cmd_ctl() {   # 参数: start | stop | restart
 }
 
 cmd_status() {
-    need_systemd
-    need_installed
+    need_systemd; need_installed
     load_conf
     local st="已停止"
     systemctl is-active --quiet "$SERVICE" && st="运行中"
     echo "--------------------------------------------"
     echo " 服务状态 : $st"
-    echo " 程序版本 : v${VERSION}"
+    echo " 程序版本 : v${INSTALLED_VERSION:-未知}"
     echo " 监听端口 : ${PORT}"
+    echo " 节点名称 : ${NODE_NAME:-AnyTLS}"
     echo "--------------------------------------------"
 }
 
@@ -254,19 +313,12 @@ cmd_qr() {
     load_conf
     read -rsp "请输入连接密码以确认身份: " input; echo
     [[ "$input" == "$PASSWORD" ]] || err "密码错误"
-    local ip uri; ip=$(get_ip)
-    uri="anytls://${PASSWORD}@${ip}:${PORT}/?insecure=1"
-    echo "连接链接: ${uri}"
-    if command -v qrencode &>/dev/null; then
-        qrencode -t ANSIUTF8 "$uri"
-    else
-        warn "未安装 qrencode，无法显示二维码"
-    fi
+    show_qr
 }
 
 cmd_uninstall() {
     need_root; need_systemd
-    read -rp "确认卸载 anytls-go（配置将被删除）? [y/N] " ans
+    read -rp "确认卸载 anytls-go（配置与二维码将被删除）? [y/N] " ans
     [[ "$ans" =~ ^[Yy]$ ]] || { info "已取消"; return; }
     load_conf 2>/dev/null
     systemctl disable --now "$SERVICE" >/dev/null 2>&1
@@ -280,7 +332,7 @@ cmd_uninstall() {
 
 usage() {
     cat <<EOF
-anytls_manager - AnyTLS-Go 服务端管理脚本
+anytls - AnyTLS-Go 服务端管理脚本
 
 用法:
   anytls install        安装（已安装则仅更新程序，保留配置）
@@ -290,11 +342,11 @@ anytls_manager - AnyTLS-Go 服务端管理脚本
   anytls restart        重启服务
   anytls status         查看状态
   anytls log [参数]     查看日志，可附加 journalctl 参数，如 -n 200
-  anytls qr             输出连接链接与二维码（需输入密码）
+  anytls qr             输入密码确认后，显示连接链接与二维码
   anytls uninstall      卸载
   anytls help           显示本帮助
 
-首次运行可直接: sudo bash anytls_manager.sh install
+首次安装: sudo bash anytls_manager.sh install
 EOF
 }
 

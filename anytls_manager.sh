@@ -1,15 +1,16 @@
 #!/bin/bash
 # =====================================================================
-# anytls_manager.sh - AnyTLS-Go 服务端一键安装与管理脚本（含二维码）
+# anytls_manager.sh - AnyTLS-Go 服务端一键安装与管理脚本（UUID 密码 + 二维码）
 # 上游项目: https://github.com/anytls/anytls-go
 # 用法: sudo bash anytls_manager.sh install
-# 安装后可使用: anytls {install|update|start|stop|restart|status|log|qr|uninstall|help}
+# 安装后可使用: anytls {install|update|start|stop|restart|status|log|qr|passwd|uninstall|help}
 # 支持架构: amd64 / arm64；需要 systemd
 # =====================================================================
 
 set -u
 
-VERSION="${ANYTLS_VERSION:-0.0.8}"       # 目标程序版本，可用环境变量覆盖
+SCRIPT_VERSION="2026.10.28-uuid"        # 脚本版本标记，安装时会打印，用于确认是否为最新脚本
+VERSION="${ANYTLS_VERSION:-0.0.8}"       # 目标程序版本，可用环境变量 ANYTLS_VERSION 覆盖
 REPO="anytls/anytls-go"
 BIN_PATH="/usr/local/bin/anytls-server"
 CONF_DIR="/etc/anytls"
@@ -37,16 +38,27 @@ get_arch() {
     esac
 }
 
+# 生成 UUID 格式密码，例如 03ad5382-2cdd-4a2c-836b-535fcb64b00f
+gen_pass() {
+    local h
+    if [[ -r /proc/sys/kernel/random/uuid ]]; then
+        cat /proc/sys/kernel/random/uuid
+    elif command -v uuidgen &>/dev/null; then
+        uuidgen
+    else
+        h=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+        echo "${h:0:8}-${h:8:4}-${h:12:4}-${h:16:4}-${h:20:12}"
+    fi | tr 'A-F' 'a-f'
+}
+
 valid_port()  { [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 65535 )); }
-valid_pass()  { [[ "$1" =~ ^[A-Za-z0-9]{6,64}$ ]]; }
+valid_pass()  { [[ "$1" =~ ^[A-Za-z0-9-]{6,64}$ ]]; }
 valid_name()  { [[ "$1" =~ ^[A-Za-z0-9_-]{1,32}$ ]]; }
 port_in_use() { ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$1$"; }
-rand_str()    { tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$1"; }
 get_ip()      { curl -s4 --max-time 5 ifconfig.me || curl -s4 --max-time 5 ip.sb || echo "服务器IP"; }
 load_conf()   { [[ -f "$CONF_FILE" ]] && source "$CONF_FILE"; }
 
 # ---------- 依赖 ----------
-# 安装 qrencode，显示真实错误信息，成功返回 0
 install_qrencode() {
     command -v qrencode &>/dev/null && return 0
     info "安装 qrencode（二维码工具）..."
@@ -82,19 +94,25 @@ install_deps() {
     else
         warn "未识别的包管理器，请确保已安装 wget、unzip、curl"
     fi
-    for c in wget unzip curl; do
+    for c in curl unzip; do
         command -v "$c" &>/dev/null || err "缺少依赖: $c"
     done
     install_qrencode || warn "qrencode 安装失败，二维码将无法显示，但连接链接仍会输出"
 }
 
-# ---------- 下载程序 ----------
+# ---------- 下载程序（通过 API 匹配资源文件，避免猜测文件名） ----------
 download_server() {
-    local arch url tmp found
+    local arch url tmp found json
     arch=$(get_arch)
-    url="https://github.com/${REPO}/releases/download/v${VERSION}/anytls_${VERSION}_linux_${arch}.zip"
+    info "目标版本: v${VERSION} (linux/${arch})"
+
+    json=$(curl -fsSL --max-time 15 "https://api.github.com/repos/${REPO}/releases/tags/v${VERSION}") \
+        || err "GitHub 上找不到版本 v${VERSION}，请确认版本号，或用 ANYTLS_VERSION=0.0.8 指定其他版本"
+    url=$(grep -o "https://[^\"]*linux_${arch}[^\"]*\.zip" <<<"$json" | head -1)
+    [[ -n "$url" ]] || err "版本 v${VERSION} 中没有 linux_${arch} 的压缩包"
+
     tmp=$(mktemp -d)
-    info "下载 anytls-go v${VERSION} (linux/${arch})..."
+    info "下载: ${url}"
     curl -fL --retry 3 --max-time 300 -o "$tmp/pkg.zip" "$url" \
         || { rm -rf "$tmp"; err "下载失败: $url"; }
     unzip -qo "$tmp/pkg.zip" -d "$tmp/out" || { rm -rf "$tmp"; err "解压失败"; }
@@ -188,10 +206,10 @@ ask_port() {
 ask_pass() {
     local pw
     while true; do
-        read -rp "请输入连接密码 [回车随机生成，仅字母数字 6-64 位]: " pw
-        pw=${pw:-$(rand_str 16)}
+        read -rp "请输入连接密码 [直接回车自动生成 UUID 格式]: " pw
+        [[ -z "$pw" ]] && pw=$(gen_pass)
         valid_pass "$pw" && { echo "$pw"; return; }
-        warn "密码仅允许字母和数字，长度 6-64"
+        warn "密码仅允许字母、数字和 -，长度 6-64"
     done
 }
 
@@ -234,7 +252,7 @@ show_qr() {
     if ! command -v qrencode &>/dev/null; then
         warn "qrencode 未安装，尝试重新安装..."
         install_qrencode || {
-            warn "仍无法安装 qrencode，二维码未生成。请手动执行: sudo apt install -y qrencode（或对应系统命令），然后运行 anytls qr"
+            warn "仍无法安装 qrencode，二维码未生成。请手动安装 qrencode 后运行 anytls qr"
             return 0
         }
     fi
@@ -254,6 +272,7 @@ show_qr() {
 # ---------- 子命令 ----------
 cmd_install() {
     need_root; need_systemd
+    info "脚本版本: ${SCRIPT_VERSION}"
     install_deps
     download_server
     sync_self
@@ -282,11 +301,12 @@ cmd_install() {
     info "安装完成！"
     print_info
     show_qr
-    echo " 管理命令 : anytls {start|stop|restart|status|update|log|qr|uninstall}"
+    echo " 管理命令 : anytls {start|stop|restart|status|update|log|qr|passwd|uninstall}"
 }
 
 cmd_update() {
     need_root; need_systemd; need_installed
+    info "脚本版本: ${SCRIPT_VERSION}"
     load_conf
     local old=${INSTALLED_VERSION:-未知}
     install_deps
@@ -334,6 +354,21 @@ cmd_qr() {
     show_qr
 }
 
+# 重新生成密码（不传参则生成 UUID），并同步配置与服务
+cmd_passwd() {
+    need_root; need_systemd; need_installed
+    load_conf
+    local pw=${1:-}
+    [[ -z "$pw" ]] && pw=$(gen_pass)
+    valid_pass "$pw" || err "密码仅允许字母、数字和 -，长度 6-64"
+    save_conf "$PORT" "$pw" "${NODE_NAME:-AnyTLS}"
+    write_unit
+    restart_and_check
+    info "密码已更新"
+    print_info
+    show_qr
+}
+
 cmd_uninstall() {
     need_root; need_systemd
     read -rp "确认卸载 anytls-go（配置与二维码将被删除）? [y/N] " ans
@@ -350,17 +385,18 @@ cmd_uninstall() {
 
 usage() {
     cat <<EOF
-anytls - AnyTLS-Go 服务端管理脚本
+anytls - AnyTLS-Go 服务端管理脚本（${SCRIPT_VERSION}）
 
 用法:
   anytls install        安装（已安装则仅更新程序，保留配置）
-  anytls update         更新到指定版本（默认 v${VERSION}）
+  anytls update         更新程序（目标版本 v${VERSION}）
   anytls start          启动服务
   anytls stop           停止服务
   anytls restart        重启服务
   anytls status         查看状态
   anytls log [参数]     查看日志，可附加 journalctl 参数，如 -n 200
   anytls qr             输入密码确认后，显示连接链接与二维码
+  anytls passwd [密码]  重新设置密码，不填则生成 UUID 格式
   anytls uninstall      卸载
   anytls help           显示本帮助
 
@@ -378,6 +414,7 @@ case "${1:-help}" in
     status)    cmd_status ;;
     log)       shift; cmd_log "$@" ;;
     qr)        cmd_qr ;;
+    passwd)    shift; cmd_passwd "$@" ;;
     uninstall) cmd_uninstall ;;
     help|-h|--help) usage ;;
     *)         usage; exit 1 ;;

@@ -7,11 +7,11 @@
 ## 特性
 
 - **一键安装**：自动下载 anytls-go 官方发布的预编译程序，无需编译环境
-- **依赖自动处理**：自动安装 `wget`、`unzip`、`curl`、`qrencode` 等工具
+- **依赖自动处理**：自动安装下载、解压和网络诊断工具；Alpine 用脚本内置生成器创建二维码，不依赖 `qrencode` APK 包
 - **交互式配置**：安装时输入监听端口和连接密码，密码留空则随机生成
 - **服务管理**：自动检测 systemd 或 OpenRC，支持开机自启、异常自动拉起、启动、停止、重启与查看状态
 - **日志查看**：systemd 使用 `journalctl`；OpenRC 使用 `/var/log/anytls.log`
-- **二维码输出**：生成连接链接并以终端二维码展示，方便移动端导入
+- **二维码输出**：生成连接链接及可扫码二维码；Alpine 使用本机内置二维码生成器并保存 PNG
 - **保留配置更新**：已安装时再次执行 `install` 或 `update` 仅更新程序，保留原端口与密码
 - **防火墙联动**：自动检测 UFW、firewalld、iptables 与 nftables 能力，并在无法自动处理时给出提示
 - **架构识别**：支持 `amd64` 与 `arm64`
@@ -48,14 +48,14 @@ sudo bash anytls_manager.sh install
 
 ### 安装过程
 
-1. 识别发行版和包管理器，并安装依赖（wget、unzip、curl、tar、qrencode）
+1. 识别发行版和包管理器，并安装依赖（wget、unzip、curl、tar；Alpine 另安装 python3）
 2. 下载 anytls-go 程序并安装到 `/usr/local/bin/anytls-server`
 3. 提示输入监听端口（默认 `8443`，需为未被占用的 1–65535 端口）
 4. 提示输入连接密码（回车则随机生成，仅限字母和数字，6–64 位）
 5. 按当前 init 系统注册 systemd 或 OpenRC 服务并启动，尝试放行防火墙端口
 6. 输出服务器信息与连接链接
 
-Alpine 上脚本会自动使用与系统版本匹配的官方 `community` 仓库安装 `qrencode`，不会修改 `/etc/apk/repositories`。如果服务器无法访问该仓库，服务和连接链接仍可正常使用；修复网络后再次执行 `anytls qr` 即可重试。
+Alpine 上不安装 `qrencode`。脚本使用 Python 3 标准库在本机生成终端二维码及 `/etc/anytls/anytls-qr.png`，不依赖 `community` 仓库中是否存在二维码包，也不会把连接信息发送到外部服务。内置生成器安装在 `/usr/local/libexec/anytls-qrgen.py`。
 
 安装完成后，管理命令会安装到 `/usr/local/bin/anytls` 和 `/usr/local/sbin/anytls`。Alpine 默认通常会在 `PATH` 中包含 `/usr/local/bin`；如果当前 shell 找不到 `anytls`，可先运行 `/usr/local/bin/anytls`，并确认 `/usr/local/bin` 在 `PATH` 中。
 

@@ -9,13 +9,13 @@
 - Updated uninstall to remove the selected init service, OpenRC helper/log/PID files, binary, management command, and configuration.
 - Validation on this Windows host: `bash -n` and `git diff --check` passed; a Bash fixture generated and checked the OpenRC init script and config-driven runner successfully. This is a mocked generation check, not a real Alpine/OpenRC service run. Docker/Podman are unavailable and no WSL distribution is installed, so Alpine runtime validation remains outstanding.
 
-## Follow-up: Alpine qrencode repository handling
+## Follow-up: QR generation on Alpine
 
-- Install `qrencode` from the official version-matched Alpine `community` repository using apk's per-command `--repository` option, without editing `/etc/apk/repositories`.
-- Track the qrencode install attempt so a failed initial install does not immediately repeat the same failing apk request when rendering the QR code.
-- Validation: Bash fixture confirmed stable-release version detection selects `v3.20/community`; Bash syntax and `git diff --check` passed. A real Alpine package installation still requires an Alpine host with network access.
+- The Alpine 3.24 community index does not contain the `qrencode` package, so repository selection cannot resolve this package on the affected host.
+- Replaced Alpine's package-based QR dependency with a self-contained Python standard-library QR encoder. Alpine installs Python 3 from its standard repositories, and the script generates terminal output and a PNG locally without `qrencode`.
+- Validation: generated a valid 246x246 RGB PNG and independently decoded it with ZXing; decoded payload exactly matched the AnyTLS URI. Bash syntax and `git diff --check` passed.
 
 ## Follow-up: command lookup on Alpine
 
 - Install the `anytls` command in both `/usr/local/bin` and `/usr/local/sbin`, and remove both copies during uninstall. This makes the command available in Alpine shells whose default `PATH` includes `/usr/local/bin` but omits `/usr/local/sbin`.
-- Validation: pending for this follow-up.
+- Validation: management command dual-install/cleanup fixture passed; Bash syntax and `git diff --check` passed.

@@ -9,13 +9,14 @@
 
 set -u
 
-SCRIPT_VERSION="2026.11.02-multidistro" # 脚本版本标记，安装时会打印，用于确认是否为最新脚本
+SCRIPT_VERSION="2026.11.02-alpine-qr"     # 脚本版本标记，安装时会打印，用于确认是否为最新脚本
 VERSION="${ANYTLS_VERSION:-0.0.8}"       # 目标程序版本，可用环境变量 ANYTLS_VERSION 覆盖
 REPO="anytls/anytls-go"
 BIN_PATH="/usr/local/bin/anytls-server"
 CONF_DIR="/etc/anytls"
 CONF_FILE="${CONF_DIR}/config.env"
 QR_PNG="${CONF_DIR}/anytls-qr.png"
+ALPINE_QR_HELPER="/usr/local/libexec/anytls-qrgen.py"
 SERVICE="anytls"
 SCRIPT_DST="/usr/local/sbin/anytls"
 SCRIPT_BIN="/usr/local/bin/anytls"
@@ -26,8 +27,6 @@ OPENRC_LOG="/var/log/${SERVICE}.log"
 OPENRC_ERR_LOG="/var/log/${SERVICE}.err"
 OPENRC_PID="/run/${SERVICE}.pid"
 OS_RELEASE_FILE="${OS_RELEASE_FILE:-/etc/os-release}"
-ALPINE_RELEASE_FILE="${ALPINE_RELEASE_FILE:-/etc/alpine-release}"
-APK_REPOSITORIES_FILE="${APK_REPOSITORIES_FILE:-/etc/apk/repositories}"
 FIREWALL_MARKER=""
 
 OS_ID="unknown"
@@ -219,33 +218,281 @@ install_qrencode() {
     command -v qrencode &>/dev/null && return 0
     QR_ENCODE_ATTEMPTED=1
     info "安装 qrencode（二维码工具）..."
-    if [[ "$PKG_MGR" == apk ]]; then
-        local branch alpine_version community_repo
-        branch=""
-        if [[ -r "$APK_REPOSITORIES_FILE" ]] && grep -Eq '/alpine/edge/(main|community)([[:space:]]|$)' "$APK_REPOSITORIES_FILE"; then
-            branch=edge
-        fi
-        if [[ "$branch" == edge ]]; then
-            alpine_version=edge
-        else
-            alpine_version=$(cut -d. -f1,2 "$ALPINE_RELEASE_FILE" 2>/dev/null)
-            [[ "$alpine_version" =~ ^[0-9]+\.[0-9]+$ ]] || {
-                warn "无法识别 Alpine 版本，不能安全选择 qrencode 软件源。"
-                return 1
-            }
-            alpine_version="v${alpine_version}"
-        fi
-        community_repo="https://dl-cdn.alpinelinux.org/alpine/${alpine_version}/community"
-        info "使用临时 Alpine community 软件源: ${community_repo}"
-        if ! apk add --no-cache --repository "$community_repo" qrencode; then
-            warn "Alpine community 软件源仍未提供 qrencode。请检查网络与 Alpine 版本，然后手动运行: apk update && apk add --no-cache --repository '${community_repo}' qrencode"
-            return 1
-        fi
-    elif ! pkg_install qrencode; then
+    if ! pkg_install qrencode; then
         [[ "$PKG_MGR" == yum ]] && warn "部分 CentOS / RHEL 系统需先启用 EPEL 才能安装 qrencode"
         return 1
     fi
     command -v qrencode &>/dev/null
+}
+
+write_qr_helper() {
+    install -d -m 755 "$(dirname "$ALPINE_QR_HELPER")"
+    cat > "$ALPINE_QR_HELPER" <<'PY'
+#!/usr/bin/env python3
+import struct
+import sys
+import zlib
+
+DATA_WORDS = [19, 34, 55, 80, 108, 136, 156, 194, 232]
+ECC_WORDS = [7, 10, 15, 20, 26, 18, 20, 24, 30]
+ALIGNMENT = [[], [6, 18], [6, 22], [6, 26], [6, 30], [6, 34],
+             [6, 22, 38], [6, 24, 42], [6, 26, 46]]
+
+
+def multiply(x, y):
+    result = 0
+    while y:
+        if y & 1:
+            result ^= x
+        x <<= 1
+        if x & 0x100:
+            x ^= 0x11D
+        y >>= 1
+    return result
+
+
+def rs_divisor(degree):
+    poly = [1]
+    root = 1
+    for _ in range(degree):
+        nxt = [0] * (len(poly) + 1)
+        for i, value in enumerate(poly):
+            nxt[i] ^= value
+            nxt[i + 1] ^= multiply(value, root)
+        poly = nxt
+        root = multiply(root, 2)
+    return poly[1:]
+
+
+def rs_remainder(data, divisor):
+    result = [0] * len(divisor)
+    for value in data:
+        factor = value ^ result[0]
+        result = result[1:] + [0]
+        for i, coefficient in enumerate(divisor):
+            result[i] ^= multiply(coefficient, factor)
+    return result
+
+
+def append_bits(out, value, count):
+    for shift in range(count - 1, -1, -1):
+        out.append((value >> shift) & 1)
+
+
+def make_codewords(payload):
+    raw = payload.encode('utf-8')
+    for version, capacity in enumerate(DATA_WORDS, 1):
+        if len(raw) <= (capacity * 8 - 12) // 8:
+            break
+    else:
+        raise ValueError('连接信息过长，内置二维码生成器最多支持 9-L 版本。')
+
+    bits = []
+    append_bits(bits, 0x4, 4)  # byte mode
+    append_bits(bits, len(raw), 8)
+    for value in raw:
+        append_bits(bits, value, 8)
+    bits.extend([0] * min(4, capacity * 8 - len(bits)))
+    while len(bits) % 8:
+        bits.append(0)
+    data = [sum(bits[i + j] << (7 - j) for j in range(8))
+            for i in range(0, len(bits), 8)]
+    pad = (0xEC, 0x11)
+    while len(data) < capacity:
+        data.append(pad[(len(data) - (len(bits) // 8)) & 1])
+
+    block_count = 1 if version <= 5 else 2
+    base, extra = divmod(capacity, block_count)
+    blocks = []
+    offset = 0
+    divisor = rs_divisor(ECC_WORDS[version - 1])
+    for block_index in range(block_count):
+        length = base + (1 if block_index >= block_count - extra else 0)
+        block = data[offset:offset + length]
+        offset += length
+        blocks.append((block, rs_remainder(block, divisor)))
+    result = []
+    for i in range(max(len(block[0]) for block in blocks)):
+        for data_block, _ in blocks:
+            if i < len(data_block):
+                result.append(data_block[i])
+    for i in range(ECC_WORDS[version - 1]):
+        for _, ecc_block in blocks:
+            result.append(ecc_block[i])
+    return version, result
+
+
+def bch(value, polynomial, shift):
+    remainder = value << shift
+    degree = polynomial.bit_length() - 1
+    while remainder.bit_length() - 1 >= degree:
+        remainder ^= polynomial << (remainder.bit_length() - 1 - degree)
+    return (value << shift) | remainder
+
+
+def build_matrix(version, codewords, mask):
+    size = version * 4 + 17
+    grid = [[None] * size for _ in range(size)]
+
+    def set_module(x, y, dark):
+        if 0 <= x < size and 0 <= y < size:
+            grid[y][x] = bool(dark)
+
+    def finder(cx, cy):
+        for dy in range(-4, 5):
+            for dx in range(-4, 5):
+                distance = max(abs(dx), abs(dy))
+                set_module(cx + dx, cy + dy, distance not in (2, 4))
+
+    finder(3, 3)
+    finder(size - 4, 3)
+    finder(3, size - 4)
+
+    for cy in ALIGNMENT[version - 1]:
+        for cx in ALIGNMENT[version - 1]:
+            if cx == 6 or cy == 6:
+                continue
+            for dy in range(-2, 3):
+                for dx in range(-2, 3):
+                    set_module(cx + dx, cy + dy,
+                               max(abs(dx), abs(dy)) != 1)
+
+    for i in range(8, size - 8):
+        if grid[6][i] is None:
+            set_module(i, 6, i % 2 == 0)
+        if grid[i][6] is None:
+            set_module(6, i, i % 2 == 0)
+
+    if version >= 7:
+        version_bits = bch(version, 0x1F25, 12)
+        for i in range(18):
+            bit = (version_bits >> i) & 1
+            a, b = size - 11 + i % 3, i // 3
+            set_module(a, b, bit)
+            set_module(b, a, bit)
+
+    def format_info():
+        value = (1 << 3) | mask  # error correction level L
+        return bch(value, 0x537, 10) ^ 0x5412
+
+    fmt = format_info()
+    for i in range(15):
+        bit = (fmt >> i) & 1
+        if i < 6:
+            set_module(8, i, bit)
+        elif i < 8:
+            set_module(8, i + 1, bit)
+        elif i == 8:
+            set_module(7, 8, bit)
+        else:
+            set_module(14 - i, 8, bit)
+        if i < 8:
+            set_module(size - 1 - i, 8, bit)
+        else:
+            set_module(8, size - 15 + i, bit)
+    set_module(8, size - 8, True)
+
+    data = []
+    for word in codewords:
+        append_bits(data, word, 8)
+    bit_index = 0
+    right = size - 1
+    upward = True
+    while right >= 1:
+        if right == 6:
+            right = 5
+        for vert in range(size):
+            y = size - 1 - vert if upward else vert
+            for x in (right, right - 1):
+                if grid[y][x] is not None:
+                    continue
+                dark = data[bit_index] if bit_index < len(data) else 0
+                bit_index += 1
+                invert = (
+                    ((x + y) % 2 == 0), y % 2 == 0, x % 3 == 0,
+                    (x + y) % 3 == 0,
+                    (y // 2 + x // 3) % 2 == 0,
+                    (x * y) % 2 + (x * y) % 3 == 0,
+                    ((x * y) % 2 + (x * y) % 3) % 2 == 0,
+                    ((x + y) % 2 + (x * y) % 3) % 2 == 0,
+                )[mask]
+                grid[y][x] = bool(dark ^ invert)
+        upward = not upward
+        right -= 2
+    return grid
+
+
+def penalty(grid):
+    size = len(grid)
+    score = 0
+    for lines in (grid, list(zip(*grid))):
+        for line in lines:
+            run_color, run_length = line[0], 1
+            for cell in line[1:]:
+                if cell == run_color:
+                    run_length += 1
+                    if run_length == 5:
+                        score += 3
+                    elif run_length > 5:
+                        score += 1
+                else:
+                    run_color, run_length = cell, 1
+            bits = ''.join('1' if cell else '0' for cell in line)
+            score += 40 * (bits.count('10111010000') + bits.count('00001011101'))
+    for y in range(size - 1):
+        for x in range(size - 1):
+            color = grid[y][x]
+            if grid[y][x + 1] == color and grid[y + 1][x] == color and grid[y + 1][x + 1] == color:
+                score += 3
+    dark = sum(sum(row) for row in grid)
+    score += (abs(dark * 20 - size * size * 10) // (size * size)) * 10
+    return score
+
+
+def png_bytes(grid, path, scale=6, border=4):
+    size = len(grid)
+    width = (size + border * 2) * scale
+    raw = bytearray()
+    for y in range(-border, size + border):
+        row = bytearray([0])
+        for x in range(-border, size + border):
+            shade = 0 if 0 <= x < size and 0 <= y < size and grid[y][x] else 255
+            row.extend((shade, shade, shade) * scale)
+        for _ in range(scale):
+            raw.extend(row)
+
+    def chunk(kind, payload):
+        body = kind + payload
+        return struct.pack('>I', len(payload)) + body + struct.pack('>I', zlib.crc32(body) & 0xFFFFFFFF)
+
+    with open(path, 'wb') as image:
+        image.write(b'\x89PNG\r\n\x1a\n')
+        image.write(chunk(b'IHDR', struct.pack('>IIBBBBB', width, width, 8, 2, 0, 0, 0)))
+        image.write(chunk(b'IDAT', zlib.compress(bytes(raw), 9)))
+        image.write(chunk(b'IEND', b''))
+
+
+def main():
+    if len(sys.argv) != 3:
+        raise SystemExit('usage: qrgen.py TEXT OUTPUT.png')
+    version, words = make_codewords(sys.argv[1])
+    candidates = [build_matrix(version, words, mask) for mask in range(8)]
+    grid = min(candidates, key=penalty)
+    border = 4
+    for y in range(-border, len(grid) + border):
+        print(''.join('██' if 0 <= x < len(grid) and 0 <= y < len(grid) and grid[y][x] else '  '
+                      for x in range(-border, len(grid) + border)))
+    png_bytes(grid, sys.argv[2])
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (OSError, ValueError) as exc:
+        print('qrgen: ' + str(exc), file=sys.stderr)
+        raise SystemExit(1)
+PY
+    chmod 755 "$ALPINE_QR_HELPER"
 }
 
 install_deps() {
@@ -253,17 +500,18 @@ install_deps() {
     case "$PKG_MGR" in
         apt|pacman) packages+=(iproute2) ;;
         dnf|yum) packages+=(iproute) ;;
-        apk) packages+=(iproute2) ;;
+        apk) packages+=(iproute2 python3) ;;
     esac
     info "通过 ${PKG_MGR} 安装基础依赖（${packages[*]}）..."
     if [[ "$PKG_MGR" == apk ]]; then
-        info "Alpine 使用 apk add --no-cache，无需预先执行 apk update。"
+        info "Alpine 使用 apk add --no-cache 安装 python3，由脚本内置生成器生成二维码。"
     fi
     pkg_install "${packages[@]}" || err "基础依赖安装失败（发行版: ${OS_PRETTY_NAME}; 包管理器: ${PKG_MGR}）"
     for c in curl unzip; do
         command -v "$c" &>/dev/null || err "缺少依赖: $c"
     done
-    install_qrencode || true
+    if [[ "$PKG_MGR" != apk ]]; then install_qrencode || true; fi
+    if [[ "$PKG_MGR" == apk ]]; then write_qr_helper; fi
 }
 
 # ---------- 下载程序（通过 API 匹配资源文件，避免猜测文件名） ----------
@@ -483,6 +731,27 @@ show_qr() {
     echo "连接链接: ${uri}"
     echo
 
+    if [[ "$OS_ID" == alpine ]]; then
+        if ! command -v python3 >/dev/null 2>&1; then
+            info "安装 Alpine 标准仓库中的 python3（内置二维码生成器需要）..."
+            pkg_install python3 || {
+                warn "python3 安装失败；连接链接仍可手动复制。"
+                return 0
+            }
+        fi
+        [[ -f "$ALPINE_QR_HELPER" ]] || write_qr_helper
+        echo "使用脚本内置生成器在本机生成二维码："
+        if python3 "$ALPINE_QR_HELPER" "$uri" "$QR_PNG"; then
+            chmod 600 "$QR_PNG"
+            info "二维码图片已保存: ${QR_PNG}"
+        else
+            warn "二维码生成失败；连接链接仍可手动复制。"
+            return 0
+        fi
+        warn "若扫码无法导入，请确认客户端版本支持 AnyTLS，并开启“允许不安全连接”。"
+        return 0
+    fi
+
     if ! command -v qrencode &>/dev/null; then
         if [[ "$QR_ENCODE_ATTEMPTED" -eq 0 ]]; then
             warn "qrencode 未安装，尝试安装一次..."
@@ -623,6 +892,7 @@ cmd_uninstall() {
     else
         rm -f "$OPENRC_INIT" "$OPENRC_RUNNER" "$OPENRC_PID" "$OPENRC_LOG" "$OPENRC_ERR_LOG"
     fi
+    rm -f "$ALPINE_QR_HELPER"
     rm -f "$BIN_PATH" "$SCRIPT_DST" "$SCRIPT_BIN"
     rm -rf "$CONF_DIR"
     info "anytls-go 已卸载"

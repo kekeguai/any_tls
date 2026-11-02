@@ -11,9 +11,9 @@
 
 ## Follow-up: Alpine qrencode repository handling
 
-- Explain that Alpine may not expose `qrencode` when its matching `community` repository is disabled, and show the commands to enable/update the source and install it.
+- Install `qrencode` from the official version-matched Alpine `community` repository using apk's per-command `--repository` option, without editing `/etc/apk/repositories`.
 - Track the qrencode install attempt so a failed initial install does not immediately repeat the same failing apk request when rendering the QR code.
-- Validation: pending for this follow-up.
+- Validation: Bash fixture confirmed stable-release version detection selects `v3.20/community`; Bash syntax and `git diff --check` passed. A real Alpine package installation still requires an Alpine host with network access.
 
 ## Follow-up: command lookup on Alpine
 

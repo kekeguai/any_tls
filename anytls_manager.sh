@@ -26,6 +26,8 @@ OPENRC_LOG="/var/log/${SERVICE}.log"
 OPENRC_ERR_LOG="/var/log/${SERVICE}.err"
 OPENRC_PID="/run/${SERVICE}.pid"
 OS_RELEASE_FILE="${OS_RELEASE_FILE:-/etc/os-release}"
+ALPINE_RELEASE_FILE="${ALPINE_RELEASE_FILE:-/etc/alpine-release}"
+APK_REPOSITORIES_FILE="${APK_REPOSITORIES_FILE:-/etc/apk/repositories}"
 FIREWALL_MARKER=""
 
 OS_ID="unknown"
@@ -217,15 +219,30 @@ install_qrencode() {
     command -v qrencode &>/dev/null && return 0
     QR_ENCODE_ATTEMPTED=1
     info "安装 qrencode（二维码工具）..."
-    if ! pkg_install qrencode; then
-        case "$PKG_MGR" in
-            apk)
-                warn "apk 仓库未提供 qrencode。请确认 /etc/apk/repositories 启用了与 Alpine 版本匹配的 community 仓库，然后运行 apk update && apk add --no-cache qrencode。"
-                ;;
-            yum)
-                warn "部分 CentOS / RHEL 系统需先启用 EPEL 才能安装 qrencode"
-                ;;
-        esac
+    if [[ "$PKG_MGR" == apk ]]; then
+        local branch alpine_version community_repo
+        branch=""
+        if [[ -r "$APK_REPOSITORIES_FILE" ]] && grep -Eq '/alpine/edge/(main|community)([[:space:]]|$)' "$APK_REPOSITORIES_FILE"; then
+            branch=edge
+        fi
+        if [[ "$branch" == edge ]]; then
+            alpine_version=edge
+        else
+            alpine_version=$(cut -d. -f1,2 "$ALPINE_RELEASE_FILE" 2>/dev/null)
+            [[ "$alpine_version" =~ ^[0-9]+\.[0-9]+$ ]] || {
+                warn "无法识别 Alpine 版本，不能安全选择 qrencode 软件源。"
+                return 1
+            }
+            alpine_version="v${alpine_version}"
+        fi
+        community_repo="https://dl-cdn.alpinelinux.org/alpine/${alpine_version}/community"
+        info "使用临时 Alpine community 软件源: ${community_repo}"
+        if ! apk add --no-cache --repository "$community_repo" qrencode; then
+            warn "Alpine community 软件源仍未提供 qrencode。请检查网络与 Alpine 版本，然后手动运行: apk update && apk add --no-cache --repository '${community_repo}' qrencode"
+            return 1
+        fi
+    elif ! pkg_install qrencode; then
+        [[ "$PKG_MGR" == yum ]] && warn "部分 CentOS / RHEL 系统需先启用 EPEL 才能安装 qrencode"
         return 1
     fi
     command -v qrencode &>/dev/null

@@ -55,7 +55,7 @@ sudo bash anytls_manager.sh install
 5. 按当前 init 系统注册 systemd 或 OpenRC 服务并启动，尝试放行防火墙端口
 6. 输出服务器信息与连接链接
 
-如果 Alpine 的软件源未启用 `community` 仓库，`qrencode` 可能无法安装；服务和连接链接仍可正常使用。启用匹配当前 Alpine 版本的 `community` 源后，运行 `apk update && apk add --no-cache qrencode`，再执行 `anytls qr` 生成二维码。
+Alpine 上脚本会自动使用与系统版本匹配的官方 `community` 仓库安装 `qrencode`，不会修改 `/etc/apk/repositories`。如果服务器无法访问该仓库，服务和连接链接仍可正常使用；修复网络后再次执行 `anytls qr` 即可重试。
 
 安装完成后，管理命令会安装到 `/usr/local/bin/anytls` 和 `/usr/local/sbin/anytls`。Alpine 默认通常会在 `PATH` 中包含 `/usr/local/bin`；如果当前 shell 找不到 `anytls`，可先运行 `/usr/local/bin/anytls`，并确认 `/usr/local/bin` 在 `PATH` 中。
 

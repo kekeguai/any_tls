@@ -9,7 +9,7 @@
 
 set -u
 
-SCRIPT_VERSION="2026.11.02-alpine-qr"     # 脚本版本标记，安装时会打印，用于确认是否为最新脚本
+SCRIPT_VERSION="2026.11.02-alpine-dirs"   # 脚本版本标记，安装时会打印，用于确认是否为最新脚本
 VERSION="${ANYTLS_VERSION:-0.0.8}"       # 目标程序版本，可用环境变量 ANYTLS_VERSION 覆盖
 REPO="anytls/anytls-go"
 BIN_PATH="/usr/local/bin/anytls-server"
@@ -226,7 +226,7 @@ install_qrencode() {
 }
 
 write_qr_helper() {
-    install -d -m 755 "$(dirname "$ALPINE_QR_HELPER")"
+    mkdir -p "$(dirname "$ALPINE_QR_HELPER")"
     cat > "$ALPINE_QR_HELPER" <<'PY'
 #!/usr/bin/env python3
 import struct
@@ -535,7 +535,7 @@ download_server() {
     [[ -n "$found" ]] || found=$(find "$tmp/out" -type f -iname '*anytls*' ! -name '*.zip' ! -name '*.md' ! -name '*.txt' | head -1)
     [[ -n "$found" ]] || { rm -rf "$tmp"; err "压缩包中未找到 anytls 可执行文件"; }
 
-    install -d -m 755 "$(dirname "$BIN_PATH")" || { rm -rf "$tmp"; err "无法创建程序目录: $(dirname "$BIN_PATH")"; }
+    mkdir -p "$(dirname "$BIN_PATH")" || { rm -rf "$tmp"; err "无法创建程序目录: $(dirname "$BIN_PATH")"; }
     install -m 755 "$found" "$BIN_PATH"
     rm -rf "$tmp"
 }
@@ -547,7 +547,7 @@ sync_self() {
     [[ -f "$self" ]] || return 0
     for target in "$SCRIPT_DST" "$SCRIPT_BIN"; do
         if [[ "$self" != "$target" ]]; then
-            install -d -m 755 "$(dirname "$target")" || err "无法创建管理命令目录: $(dirname "$target")"
+            mkdir -p "$(dirname "$target")" || err "无法创建管理命令目录: $(dirname "$target")"
             install -m 755 "$self" "$target" || err "无法安装管理命令: ${target}"
         fi
     done
@@ -641,7 +641,7 @@ EOF
         svc_reload_daemon || err "systemd 重新加载服务定义失败"
         ;;
       openrc)
-        install -d -m 755 "$(dirname "$OPENRC_RUNNER")"
+        mkdir -p "$(dirname "$OPENRC_RUNNER")"
         cat > "$OPENRC_RUNNER" <<EOF
 #!/bin/sh
 set -a

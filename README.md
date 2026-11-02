@@ -9,18 +9,18 @@
 - **一键安装**：自动下载 anytls-go 官方发布的预编译程序，无需编译环境
 - **依赖自动处理**：自动安装 `wget`、`unzip`、`curl`、`qrencode` 等工具
 - **交互式配置**：安装时输入监听端口和连接密码，密码留空则随机生成
-- **systemd 管理**：开机自启、异常自动拉起，支持启动、停止、重启与查看状态
-- **日志查看**：基于 `journalctl`，可附加参数查看指定行数
+- **服务管理**：自动检测 systemd 或 OpenRC，支持开机自启、异常自动拉起、启动、停止、重启与查看状态
+- **日志查看**：systemd 使用 `journalctl`；OpenRC 使用 `/var/log/anytls.log`
 - **二维码输出**：生成连接链接并以终端二维码展示，方便移动端导入
 - **保留配置更新**：已安装时再次执行 `install` 或 `update` 仅更新程序，保留原端口与密码
-- **防火墙联动**：自动检测 ufw / firewalld 并放行或关闭对应端口
+- **防火墙联动**：自动检测 UFW、firewalld、iptables 与 nftables 能力，并在无法自动处理时给出提示
 - **架构识别**：支持 `amd64` 与 `arm64`
 
 ## 系统要求
 
-- Debian / Ubuntu / CentOS / RHEL / Rocky / AlmaLinux / Fedora / Arch Linux
+- Debian / Ubuntu / CentOS / RHEL / Rocky / AlmaLinux / Fedora / Arch Linux / Alpine Linux
 - root 权限（或 sudo）
-- systemd
+- systemd 或 OpenRC
 - 架构：`x86_64`（amd64）或 `aarch64`（arm64）
 - 可访问 GitHub 与 raw.githubusercontent.com
 
@@ -48,11 +48,11 @@ sudo bash anytls_manager.sh install
 
 ### 安装过程
 
-1. 安装依赖（wget、unzip、curl、qrencode）
+1. 识别发行版和包管理器，并安装依赖（wget、unzip、curl、tar、qrencode）
 2. 下载 anytls-go 程序并安装到 `/usr/local/bin/anytls-server`
 3. 提示输入监听端口（默认 `8443`，需为未被占用的 1–65535 端口）
 4. 提示输入连接密码（回车则随机生成，仅限字母和数字，6–64 位）
-5. 注册 systemd 服务并启动，尝试放行防火墙端口
+5. 按当前 init 系统注册 systemd 或 OpenRC 服务并启动，尝试放行防火墙端口
 6. 输出服务器信息与连接链接
 
 安装完成后，脚本会被复制到 `/usr/local/sbin/anytls`，之后可直接使用 `anytls` 命令。
@@ -67,7 +67,7 @@ sudo bash anytls_manager.sh install
 | `anytls stop` | 停止服务 |
 | `anytls restart` | 重启服务 |
 | `anytls status` | 查看服务状态、程序版本与监听端口 |
-| `anytls log [参数]` | 查看服务日志，默认最近 100 行，可附加 `journalctl` 参数 |
+| `anytls log [参数]` | 查看服务日志，systemd 默认显示最近 100 行，OpenRC 默认跟踪最多 200 行 |
 | `anytls qr` | 输入密码确认后，输出连接链接与终端二维码 |
 | `anytls uninstall` | 卸载程序、服务与配置（需确认） |
 | `anytls help` | 显示帮助信息 |
@@ -116,15 +116,17 @@ sudo anytls uninstall         # 卸载
 | `/usr/local/bin/anytls-server` | anytls-go 服务端程序 |
 | `/etc/anytls/config.env` | 配置文件（端口、密码、版本），权限 600 |
 | `/etc/systemd/system/anytls.service` | systemd 服务文件 |
+| `/etc/init.d/anytls` | OpenRC 服务文件（Alpine 等 OpenRC 系统） |
+| `/usr/local/libexec/anytls-runner` | OpenRC 启动器，从受限配置文件读取服务参数 |
 
 ## 注意事项
 
 1. **云服务器安全组**：阿里云、腾讯云、AWS 等需在控制台安全组中手动放行所选端口（TCP），脚本只能处理系统本机防火墙。
-2. **密码安全**：密码会明文写入 systemd 服务文件，并保存在 `/etc/anytls/config.env` 中。该目录权限为 700，配置文件为 600，但 systemd 服务文件的权限取决于系统默认值。
+2. **密码安全**：密码保存在 `/etc/anytls/config.env` 中，目录权限为 700、配置文件权限为 600。systemd 通过 `EnvironmentFile` 读取配置，OpenRC 通过受限启动器读取配置，不会把密码写入服务定义文件。
 3. **密码限制**：为避免参数解析问题，密码仅允许字母和数字，长度 6–64 位。
 4. **版本更新**：`anytls update` 会按脚本内 `VERSION` 变量下载对应版本。如需升级，可修改脚本中的版本号后执行更新，或通过环境变量 `ANYTLS_VERSION` 指定版本。
 5. **下载文件名**：脚本按 `anytls_<版本>_linux_<架构>.zip` 的规则下载。若上游发布文件名有变化，需同步修改 `download_server` 函数。
-6. **服务参数**：服务端以 `-l 0.0.0.0:<端口> -p <密码>` 方式启动。若上游程序参数有变化，需修改 `write_unit` 函数中的 `ExecStart`。
+6. **服务参数**：服务端以 `-l 0.0.0.0:<端口> -p <密码>` 方式启动。若上游程序参数有变化，需修改 `write_unit` 函数生成的服务定义或 OpenRC 启动器。
 7. **首次使用建议**：请先在测试机上完整执行一次安装，确认服务能正常启动与连接。
 
 ## 常见问题
@@ -133,13 +135,13 @@ sudo anytls uninstall         # 卸载
 执行 `sudo anytls log -n 200` 查看日志。常见原因包括端口被占用、程序参数与上游版本不一致、架构不匹配。
 
 **客户端无法连接？**
-依次检查：`anytls status` 中服务是否为「运行中」；云安全组是否放行端口（TCP）；系统防火墙（`ufw status` 或 `firewall-cmd --list-ports`）是否放行；客户端是否开启了“允许不安全连接”。
+依次检查：`anytls status` 中服务是否为「运行中」；云安全组是否放行端口（TCP）；系统防火墙（`ufw status`、`firewall-cmd --list-ports` 或 Alpine 的 iptables 规则）是否放行；客户端是否开启了“允许不安全连接”。
 
 **忘记密码？**
 执行 `sudo cat /etc/anytls/config.env` 查看当前配置，或执行 `anytls qr` 查看连接信息（需先输入密码）。
 
 **如何修改端口或密码？**
-目前脚本未提供单独的修改命令。可编辑 `/etc/anytls/config.env` 后，同步修改 `/etc/systemd/system/anytls.service` 中的 `ExecStart`，再执行 `sudo systemctl daemon-reload && sudo anytls restart`。
+目前脚本未提供单独的端口修改命令。可编辑 `/etc/anytls/config.env` 中的 `PORT` 后，执行 `sudo anytls restart`。
 
 **如何彻底删除？**
 执行 `sudo anytls uninstall`，确认后会删除服务、程序、配置及管理脚本本体。

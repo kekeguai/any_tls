@@ -535,6 +535,7 @@ download_server() {
     [[ -n "$found" ]] || found=$(find "$tmp/out" -type f -iname '*anytls*' ! -name '*.zip' ! -name '*.md' ! -name '*.txt' | head -1)
     [[ -n "$found" ]] || { rm -rf "$tmp"; err "压缩包中未找到 anytls 可执行文件"; }
 
+    install -d -m 755 "$(dirname "$BIN_PATH")" || { rm -rf "$tmp"; err "无法创建程序目录: $(dirname "$BIN_PATH")"; }
     install -m 755 "$found" "$BIN_PATH"
     rm -rf "$tmp"
 }
@@ -546,6 +547,7 @@ sync_self() {
     [[ -f "$self" ]] || return 0
     for target in "$SCRIPT_DST" "$SCRIPT_BIN"; do
         if [[ "$self" != "$target" ]]; then
+            install -d -m 755 "$(dirname "$target")" || err "无法创建管理命令目录: $(dirname "$target")"
             install -m 755 "$self" "$target" || err "无法安装管理命令: ${target}"
         fi
     done

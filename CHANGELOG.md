@@ -18,4 +18,5 @@
 ## Follow-up: command lookup on Alpine
 
 - Install the `anytls` command in both `/usr/local/bin` and `/usr/local/sbin`, and remove both copies during uninstall. This makes the command available in Alpine shells whose default `PATH` includes `/usr/local/bin` but omits `/usr/local/sbin`.
+- Create `/usr/local/bin` and `/usr/local/sbin` before installing the command, and create the server binary directory before extraction, because Alpine minimal systems do not ship these directories and busybox `install` does not create parents.
 - Validation: management command dual-install/cleanup fixture passed; Bash syntax and `git diff --check` passed.

@@ -57,7 +57,7 @@ sudo bash anytls_manager.sh install
 
 如果 Alpine 的软件源未启用 `community` 仓库，`qrencode` 可能无法安装；服务和连接链接仍可正常使用。启用匹配当前 Alpine 版本的 `community` 源后，运行 `apk update && apk add --no-cache qrencode`，再执行 `anytls qr` 生成二维码。
 
-安装完成后，脚本会被复制到 `/usr/local/sbin/anytls`，之后可直接使用 `anytls` 命令。
+安装完成后，管理命令会安装到 `/usr/local/bin/anytls` 和 `/usr/local/sbin/anytls`。Alpine 默认通常会在 `PATH` 中包含 `/usr/local/bin`；如果当前 shell 找不到 `anytls`，可先运行 `/usr/local/bin/anytls`，并确认 `/usr/local/bin` 在 `PATH` 中。
 
 ## 命令一览
 
@@ -115,6 +115,7 @@ sudo anytls uninstall         # 卸载
 | 路径 | 说明 |
 | --- | --- |
 | `/usr/local/sbin/anytls` | 管理脚本本体 |
+| `/usr/local/bin/anytls` | 便于默认 `PATH` 查找的管理命令入口 |
 | `/usr/local/bin/anytls-server` | anytls-go 服务端程序 |
 | `/etc/anytls/config.env` | 配置文件（端口、密码、版本），权限 600 |
 | `/etc/systemd/system/anytls.service` | systemd 服务文件 |

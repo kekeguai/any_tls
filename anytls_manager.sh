@@ -18,6 +18,7 @@ CONF_FILE="${CONF_DIR}/config.env"
 QR_PNG="${CONF_DIR}/anytls-qr.png"
 SERVICE="anytls"
 SCRIPT_DST="/usr/local/sbin/anytls"
+SCRIPT_BIN="/usr/local/bin/anytls"
 SYSTEMD_UNIT="/etc/systemd/system/${SERVICE}.service"
 OPENRC_INIT="/etc/init.d/${SERVICE}"
 OPENRC_RUNNER="/usr/local/libexec/${SERVICE}-runner"
@@ -275,10 +276,14 @@ download_server() {
 
 # 每次 install 都同步管理脚本本体，保证 anytls 命令与最新脚本一致
 sync_self() {
-    local self; self=$(readlink -f "$0")
-    if [[ -f "$self" && "$self" != "$SCRIPT_DST" ]]; then
-        install -m 755 "$self" "$SCRIPT_DST"
-    fi
+    local self target
+    self=$(readlink -f "$0")
+    [[ -f "$self" ]] || return 0
+    for target in "$SCRIPT_DST" "$SCRIPT_BIN"; do
+        if [[ "$self" != "$target" ]]; then
+            install -m 755 "$self" "$target" || err "无法安装管理命令: ${target}"
+        fi
+    done
 }
 
 # ---------- 防火墙 ----------
@@ -601,7 +606,7 @@ cmd_uninstall() {
     else
         rm -f "$OPENRC_INIT" "$OPENRC_RUNNER" "$OPENRC_PID" "$OPENRC_LOG" "$OPENRC_ERR_LOG"
     fi
-    rm -f "$BIN_PATH" "$SCRIPT_DST"
+    rm -f "$BIN_PATH" "$SCRIPT_DST" "$SCRIPT_BIN"
     rm -rf "$CONF_DIR"
     info "anytls-go 已卸载"
 }

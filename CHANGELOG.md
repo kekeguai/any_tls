@@ -14,3 +14,8 @@
 - Explain that Alpine may not expose `qrencode` when its matching `community` repository is disabled, and show the commands to enable/update the source and install it.
 - Track the qrencode install attempt so a failed initial install does not immediately repeat the same failing apk request when rendering the QR code.
 - Validation: pending for this follow-up.
+
+## Follow-up: command lookup on Alpine
+
+- Install the `anytls` command in both `/usr/local/bin` and `/usr/local/sbin`, and remove both copies during uninstall. This makes the command available in Alpine shells whose default `PATH` includes `/usr/local/bin` but omits `/usr/local/sbin`.
+- Validation: pending for this follow-up.

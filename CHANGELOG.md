@@ -8,3 +8,9 @@
 - Added firewall capability checks for UFW, firewalld, iptables, and nftables, with marker-based cleanup for rules created by the script.
 - Updated uninstall to remove the selected init service, OpenRC helper/log/PID files, binary, management command, and configuration.
 - Validation on this Windows host: `bash -n` and `git diff --check` passed; a Bash fixture generated and checked the OpenRC init script and config-driven runner successfully. This is a mocked generation check, not a real Alpine/OpenRC service run. Docker/Podman are unavailable and no WSL distribution is installed, so Alpine runtime validation remains outstanding.
+
+## Follow-up: Alpine qrencode repository handling
+
+- Explain that Alpine may not expose `qrencode` when its matching `community` repository is disabled, and show the commands to enable/update the source and install it.
+- Track the qrencode install attempt so a failed initial install does not immediately repeat the same failing apk request when rendering the QR code.
+- Validation: pending for this follow-up.

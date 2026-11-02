@@ -32,6 +32,7 @@ OS_ID_LIKE=""
 OS_PRETTY_NAME="未知 Linux"
 PKG_MGR="unknown"
 INIT_SYSTEM="unknown"
+QR_ENCODE_ATTEMPTED=0
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 info() { echo -e "${GREEN}[INFO]${NC} $*"; }
@@ -213,9 +214,17 @@ load_conf()   { [[ -f "$CONF_FILE" ]] && source "$CONF_FILE"; }
 # ---------- 依赖 ----------
 install_qrencode() {
     command -v qrencode &>/dev/null && return 0
+    QR_ENCODE_ATTEMPTED=1
     info "安装 qrencode（二维码工具）..."
     if ! pkg_install qrencode; then
-        [[ "$PKG_MGR" == yum ]] && warn "部分 CentOS / RHEL 系统需先启用 EPEL 才能安装 qrencode"
+        case "$PKG_MGR" in
+            apk)
+                warn "apk 仓库未提供 qrencode。请确认 /etc/apk/repositories 启用了与 Alpine 版本匹配的 community 仓库，然后运行 apk update && apk add --no-cache qrencode。"
+                ;;
+            yum)
+                warn "部分 CentOS / RHEL 系统需先启用 EPEL 才能安装 qrencode"
+                ;;
+        esac
         return 1
     fi
     command -v qrencode &>/dev/null
@@ -236,7 +245,7 @@ install_deps() {
     for c in curl unzip; do
         command -v "$c" &>/dev/null || err "缺少依赖: $c"
     done
-    install_qrencode || warn "qrencode 安装失败，二维码将无法显示，但连接链接仍会输出"
+    install_qrencode || true
 }
 
 # ---------- 下载程序（通过 API 匹配资源文件，避免猜测文件名） ----------
@@ -453,11 +462,16 @@ show_qr() {
     echo
 
     if ! command -v qrencode &>/dev/null; then
-        warn "qrencode 未安装，尝试重新安装..."
-        install_qrencode || {
-            warn "仍无法安装 qrencode，二维码未生成。请手动安装 qrencode 后运行 anytls qr"
+        if [[ "$QR_ENCODE_ATTEMPTED" -eq 0 ]]; then
+            warn "qrencode 未安装，尝试安装一次..."
+            install_qrencode || {
+                warn "二维码未生成，连接链接仍可手动复制；安装好 qrencode 后再次运行 anytls qr。"
+                return 0
+            }
+        else
+            warn "本次运行已尝试安装 qrencode；二维码未生成，连接链接仍可手动复制。修复软件仓库后再次运行 anytls qr。"
             return 0
-        }
+        fi
     fi
 
     echo "请使用 NekoBox / Shadowrocket 扫描下方二维码："

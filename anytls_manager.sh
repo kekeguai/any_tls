@@ -860,8 +860,6 @@ cmd_log() {
 cmd_qr() {
     need_root; need_installed
     load_conf
-    read -rsp "请输入连接密码以确认身份: " input; echo
-    [[ "$input" == "$PASSWORD" ]] || err "密码错误"
     show_qr
 }
 
@@ -900,11 +898,56 @@ cmd_uninstall() {
     info "anytls-go 已卸载"
 }
 
+cmd_menu() {
+    local choice
+    while true; do
+        cat <<'EOF'
+
+AnyTLS 服务端管理菜单
+  1) 安装 AnyTLS
+  2) 重启服务
+  3) 启动服务
+  4) 停止服务
+  5) 查看状态
+  6) 查看日志（最近 200 行）
+  7) 更新程序
+  8) 查看连接信息与二维码
+  9) 重新生成连接密码
+ 10) 卸载 AnyTLS
+ 11) 显示命令帮助
+  0) 退出
+EOF
+        if ! read -rp "请选择操作 [0-11]: " choice; then
+            echo
+            return 0
+        fi
+
+        case "$choice" in
+            1) cmd_install ;;
+            2) cmd_ctl restart ;;
+            3) cmd_ctl start ;;
+            4) cmd_ctl stop ;;
+            5) cmd_status ;;
+            6) cmd_log -n 200 ;;
+            7) cmd_update ;;
+            8) cmd_qr ;;
+            9) cmd_passwd ;;
+            10) cmd_uninstall ;;
+            11) usage ;;
+            0) info "已退出"; return 0 ;;
+            *) warn "无效选项，请输入 0-11" ;;
+        esac
+
+        read -rp "按回车返回菜单... " _ || return 0
+    done
+}
+
 usage() {
     cat <<EOF
 anytls - AnyTLS-Go 服务端管理脚本（${SCRIPT_VERSION}）
 
 用法:
+  anytls [menu]         打开交互式管理菜单
   anytls install        安装（已安装则仅更新程序，保留配置）
   anytls update         更新程序（目标版本 v${VERSION}）
   anytls start          启动服务
@@ -912,18 +955,20 @@ anytls - AnyTLS-Go 服务端管理脚本（${SCRIPT_VERSION}）
   anytls restart        重启服务
   anytls status         查看状态
   anytls log [参数]     查看服务日志，可附加 journalctl/tail 参数，如 -n 200
-  anytls qr             输入密码确认后，显示连接链接与二维码
+  anytls qr             直接显示连接链接与二维码（需 root 权限）
   anytls passwd [密码]  重新设置密码，不填则生成 UUID 格式
   anytls uninstall      卸载
   anytls help           显示本帮助
 
 首次安装: sudo bash anytls_manager.sh install
+无参数启动: anytls
 EOF
 }
 
 # ---------- 入口 ----------
 detect_platform
-case "${1:-help}" in
+case "${1-menu}" in
+    menu)      cmd_menu ;;
     install)   cmd_install ;;
     update)    cmd_update ;;
     start)     cmd_ctl start ;;

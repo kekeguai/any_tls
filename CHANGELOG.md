@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-11-24
+
+- Added an interactive management menu available from `anytls` with no arguments or `anytls menu`; existing direct subcommands remain available.
+- `anytls qr` no longer asks for the connection password before displaying the link and QR code; root privileges remain required. The displayed link and QR code contain the connection password.
+
 ## 2026-11-02
 
 - Added package manager detection and installation support for Debian/Ubuntu (`apt`), CentOS/RHEL/Rocky/AlmaLinux/Fedora (`dnf`, falling back to `yum`), Arch/Manjaro (`pacman`), and Alpine (`apk add --no-cache`).

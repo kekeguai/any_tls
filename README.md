@@ -28,6 +28,8 @@
 
 ### 方式一：一行命令下载并安装（推荐）
 
+安装后直接运行 `sudo anytls` 即可打开交互式管理菜单；菜单选项 1 会在首次安装时提示用户选择端口（默认 `8443`），已安装时则按现有行为更新程序并保留原端口与配置。
+
 ```bash
 curl -fsSL -o anytls_manager.sh https://raw.githubusercontent.com/kekeguai/any_tls/refs/heads/main/anytls_manager.sh && sudo bash anytls_manager.sh install
 ```
@@ -59,18 +61,38 @@ Alpine 上不安装 `qrencode`。脚本使用 Python 3 标准库在本机生成�
 
 安装完成后，管理命令会安装到 `/usr/local/bin/anytls` 和 `/usr/local/sbin/anytls`。Alpine 默认通常会在 `PATH` 中包含 `/usr/local/bin`；如果当前 shell 找不到 `anytls`，可先运行 `/usr/local/bin/anytls`，并确认 `/usr/local/bin` 在 `PATH` 中。
 
+## 交互式管理菜单
+
+不带参数运行 `sudo anytls`，或执行 `sudo anytls menu`，即可打开菜单：
+
+| 选项 | 操作 |
+| --- | --- |
+| 1 | 安装 AnyTLS（首次安装时自行选择监听端口） |
+| 2 | 重启服务 |
+| 3 | 启动服务 |
+| 4 | 停止服务 |
+| 5 | 查看服务状态 |
+| 6 | 查看最近 200 行日志 |
+| 7 | 更新程序 |
+| 8 | 查看连接信息与二维码（需 root 权限） |
+| 9 | 重新生成连接密码 |
+| 10 | 卸载 AnyTLS |
+| 11 | 显示命令帮助 |
+| 0 | 退出菜单 |
+
 ## 命令一览
 
 | 命令 | 说明 |
 | --- | --- |
-| `anytls install` | 安装；若已安装则仅更新程序并保留原配置 |
+| `anytls` / `anytls menu` | 打开交互式管理菜单 |
+| `anytls install` | 安装；首次安装时选择端口，若已安装则仅更新程序并保留原配置 |
 | `anytls update` | 更新到脚本内指定的版本，保留原配置 |
 | `anytls start` | 启动服务 |
 | `anytls stop` | 停止服务 |
 | `anytls restart` | 重启服务 |
 | `anytls status` | 查看服务状态、程序版本与监听端口 |
 | `anytls log [参数]` | 查看服务日志，systemd 默认显示最近 100 行，OpenRC 默认跟踪最多 200 行 |
-| `anytls qr` | 输入密码确认后，输出连接链接与终端二维码 |
+| `anytls qr` | 直接输出连接链接与终端二维码（需 root 权限） |
 | `anytls uninstall` | 卸载程序、服务与配置（需确认） |
 | `anytls help` | 显示帮助信息 |
 
@@ -83,7 +105,7 @@ sudo anytls stop              # 停止服务
 sudo anytls start             # 启动服务
 sudo anytls log               # 查看最近 100 行日志
 sudo anytls log -n 200        # 查看最近 200 行日志
-sudo anytls qr                # 输出连接链接与二维码
+sudo anytls qr                # 直接输出连接链接与二维码（需 root 权限）
 sudo anytls update            # 更新程序版本
 sudo anytls uninstall         # 卸载
 ```
@@ -141,7 +163,7 @@ sudo anytls uninstall         # 卸载
 依次检查：`anytls status` 中服务是否为「运行中」；云安全组是否放行端口（TCP）；系统防火墙（`ufw status`、`firewall-cmd --list-ports` 或 Alpine 的 iptables 规则）是否放行；客户端是否开启了“允许不安全连接”。
 
 **忘记密码？**
-执行 `sudo cat /etc/anytls/config.env` 查看当前配置，或执行 `anytls qr` 查看连接信息（需先输入密码）。
+执行 `sudo cat /etc/anytls/config.env` 查看当前配置，或执行 `sudo anytls qr` 直接查看连接信息。二维码和连接链接包含客户端连接密码，请妥善保护终端输出与二维码图片。
 
 **如何修改端口或密码？**
 目前脚本未提供单独的端口修改命令。可编辑 `/etc/anytls/config.env` 中的 `PORT` 后，执行 `sudo anytls restart`。

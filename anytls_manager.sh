@@ -631,7 +631,7 @@ After=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=${CONF_FILE}
-ExecStart=${BIN_PATH} -l 0.0.0.0:\$PORT -p \$PASSWORD
+ExecStart=${BIN_PATH} -l 0.0.0.0:\${PORT} -p \$PASSWORD
 Restart=on-failure
 RestartSec=5
 

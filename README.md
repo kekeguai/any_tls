@@ -1,180 +1,114 @@
-# AnyTLS-Go 一键安装与管理脚本
+# AnyTLS Linux 服务端管理脚本
 
-基于 [anytls/anytls-go](https://github.com/anytls/anytls-go) 的 Linux 服务端一键安装与管理脚本。支持一键安装、更新、启停、查看状态与日志、生成连接二维码和卸载，安装后可直接使用 `anytls` 命令管理。
+> 在 Linux 服务器上安装和管理 [AnyTLS-Go](https://github.com/anytls/anytls-go) 服务端。适合需要自建 AnyTLS 节点的个人用户；安装后可用交互菜单管理服务、查看连接信息和生成二维码。
 
-脚本地址：<https://raw.githubusercontent.com/kekeguai/any_tls/refs/heads/main/anytls_manager.sh>
+## 快速安装
 
-## 特性
-
-- **一键安装**：自动下载 anytls-go 官方发布的预编译程序，无需编译环境
-- **依赖自动处理**：自动安装下载、解压和网络诊断工具；Alpine 用脚本内置生成器创建二维码，不依赖 `qrencode` APK 包
-- **交互式配置**：安装时输入监听端口和连接密码，密码留空则随机生成
-- **服务管理**：自动检测 systemd 或 OpenRC，支持开机自启、异常自动拉起、启动、停止、重启与查看状态
-- **日志查看**：systemd 使用 `journalctl`；OpenRC 使用 `/var/log/anytls.log`
-- **二维码输出**：生成连接链接及可扫码二维码；Alpine 使用本机内置二维码生成器并保存 PNG
-- **保留配置更新**：已安装时再次执行 `install` 或 `update` 仅更新程序，保留原端口与密码
-- **防火墙联动**：自动检测 UFW、firewalld、iptables 与 nftables 能力，并在无法自动处理时给出提示
-- **架构识别**：支持 `amd64` 与 `arm64`
-
-## 系统要求
-
-- Debian / Ubuntu / CentOS / RHEL / Rocky / AlmaLinux / Fedora / Arch Linux / Alpine Linux
-- root 权限（或 sudo）
-- systemd 或 OpenRC
-- 架构：`x86_64`（amd64）或 `aarch64`（arm64）
-- 可访问 GitHub 与 raw.githubusercontent.com
-
-## 安装
-
-### 方式一：一行命令下载并安装（推荐）
-
-安装后直接运行 `sudo anytls` 即可打开交互式管理菜单；菜单选项 1 会在首次安装时提示用户选择端口（默认 `8443`），已安装时则按现有行为更新程序并保留原端口与配置。
+支持 Debian、Ubuntu、CentOS、RHEL、Rocky Linux、AlmaLinux、Fedora、Arch Linux 和 Alpine Linux；需要 `systemd` 或 `OpenRC`、`amd64` 或 `arm64` 架构，并以 root 权限运行。
 
 ```bash
-curl -fsSL -o anytls_manager.sh https://raw.githubusercontent.com/kekeguai/any_tls/refs/heads/main/anytls_manager.sh && sudo bash anytls_manager.sh install
-```
-
-### 方式二：使用 wget 下载
-
-```bash
-wget -O anytls_manager.sh https://raw.githubusercontent.com/kekeguai/any_tls/refs/heads/main/anytls_manager.sh
+curl -fsSL -o anytls_manager.sh https://raw.githubusercontent.com/kekeguai/any_tls/refs/heads/main/anytls_manager.sh
 sudo bash anytls_manager.sh install
 ```
 
-### 方式三：手动粘贴保存
+首次安装过程中会依次询问：
 
-```bash
-nano anytls_manager.sh      # 粘贴脚本内容后 Ctrl+O 保存，Ctrl+X 退出
-sudo bash anytls_manager.sh install
-```
+1. **监听端口**：默认 `8443`；输入 `1–65535` 的未占用端口。
+2. **连接密码**：直接回车会自动生成 UUID 格式密码；手动设置时允许字母、数字和连字符 `-`，长度为 6–64 位。
+3. **节点名称**：默认 `AnyTLS`；允许字母、数字、下划线和连字符，长度为 1–32 位。
 
-### 安装过程
+安装脚本会下载 AnyTLS-Go 发布程序、注册并启动服务，并尝试配置服务器本机防火墙。安装完成后即可运行 `sudo anytls` 打开管理菜单。
 
-1. 识别发行版和包管理器，并安装依赖（wget、unzip、curl、tar；Alpine 另安装 python3）
-2. 下载 anytls-go 程序并安装到 `/usr/local/bin/anytls-server`
-3. 提示输入监听端口（默认 `8443`，需为未被占用的 1–65535 端口）
-4. 提示输入连接密码（回车则随机生成，仅限字母和数字，6–64 位）
-5. 按当前 init 系统注册 systemd 或 OpenRC 服务并启动，尝试放行防火墙端口
-6. 输出服务器信息与连接链接
+## 交互菜单
 
-Alpine 上不安装 `qrencode`。脚本使用 Python 3 标准库在本机生成终端二维码及 `/etc/anytls/anytls-qr.png`，不依赖 `community` 仓库中是否存在二维码包，也不会把连接信息发送到外部服务。内置生成器安装在 `/usr/local/libexec/anytls-qrgen.py`。
-
-安装完成后，管理命令会安装到 `/usr/local/bin/anytls` 和 `/usr/local/sbin/anytls`。Alpine 默认通常会在 `PATH` 中包含 `/usr/local/bin`；如果当前 shell 找不到 `anytls`，可先运行 `/usr/local/bin/anytls`，并确认 `/usr/local/bin` 在 `PATH` 中。
-
-## 交互式管理菜单
-
-不带参数运行 `sudo anytls`，或执行 `sudo anytls menu`，即可打开菜单：
+运行 `sudo anytls` 或 `sudo anytls menu` 打开菜单。菜单复用脚本的管理命令；需要管理员权限的操作会执行相应权限检查。
 
 | 选项 | 操作 |
 | --- | --- |
-| 1 | 安装 AnyTLS（首次安装时自行选择监听端口） |
-| 2 | 重启服务 |
-| 3 | 启动服务 |
-| 4 | 停止服务 |
-| 5 | 查看服务状态 |
-| 6 | 查看最近 200 行日志 |
-| 7 | 更新程序 |
-| 8 | 查看连接信息与二维码（需 root 权限） |
-| 9 | 重新生成连接密码 |
-| 10 | 卸载 AnyTLS |
-| 11 | 显示命令帮助 |
-| 0 | 退出菜单 |
+| `1` | 安装 AnyTLS；首次安装时配置端口、密码和节点名称，已安装时更新程序并保留现有配置 |
+| `2` | 重启服务 |
+| `3` | 启动服务 |
+| `4` | 停止服务 |
+| `5` | 查看服务状态、版本、端口和节点名称 |
+| `6` | 查看最近 200 行日志 |
+| `7` | 更新程序并保留现有配置 |
+| `8` | 查看连接信息并生成二维码（需要 root 权限） |
+| `9` | 重新生成连接密码并重启服务 |
+| `10` | 卸载服务、程序和配置（需要确认） |
+| `11` | 显示命令帮助 |
+| `0` | 退出菜单 |
 
-## 命令一览
+注意：已安装后选择菜单 `1` 是更新程序，不会重新询问或修改端口。当前没有单独的端口修改菜单项。
+
+## 命令行用法
+
+也可以直接运行子命令，不必进入菜单：
 
 | 命令 | 说明 |
 | --- | --- |
-| `anytls` / `anytls menu` | 打开交互式管理菜单 |
-| `anytls install` | 安装；首次安装时选择端口，若已安装则仅更新程序并保留原配置 |
-| `anytls update` | 更新到脚本内指定的版本，保留原配置 |
-| `anytls start` | 启动服务 |
-| `anytls stop` | 停止服务 |
-| `anytls restart` | 重启服务 |
-| `anytls status` | 查看服务状态、程序版本与监听端口 |
-| `anytls log [参数]` | 查看服务日志，systemd 默认显示最近 100 行，OpenRC 默认跟踪最多 200 行 |
-| `anytls qr` | 直接输出连接链接与终端二维码（需 root 权限） |
-| `anytls uninstall` | 卸载程序、服务与配置（需确认） |
-| `anytls help` | 显示帮助信息 |
+| `sudo anytls install` | 首次安装；若已安装则更新程序并保留现有配置 |
+| `sudo anytls update` | 更新程序并保留现有配置 |
+| `sudo anytls start` | 启动服务 |
+| `sudo anytls stop` | 停止服务 |
+| `sudo anytls restart` | 重启服务 |
+| `anytls status` | 查看服务状态和配置摘要 |
+| `sudo anytls log` | 查看日志；可附加 `-n 200` 等参数 |
+| `sudo anytls qr` | 直接显示连接链接并生成二维码，不需要再次输入连接密码 |
+| `sudo anytls passwd` | 重新生成连接密码并重启服务 |
+| `sudo anytls passwd '<新密码>'` | 设置指定连接密码；长度 6–64 位，仅允许字母、数字和 `-` |
+| `sudo anytls uninstall` | 确认后卸载 |
+| `anytls help` | 查看帮助 |
 
-## 使用示例
+## 连接信息与二维码
 
-```bash
-sudo anytls status            # 查看服务状态
-sudo anytls restart           # 重启服务
-sudo anytls stop              # 停止服务
-sudo anytls start             # 启动服务
-sudo anytls log               # 查看最近 100 行日志
-sudo anytls log -n 200        # 查看最近 200 行日志
-sudo anytls qr                # 直接输出连接链接与二维码（需 root 权限）
-sudo anytls update            # 更新程序版本
-sudo anytls uninstall         # 卸载
+菜单选项 `8` 或执行 `sudo anytls qr` 会显示现有连接链接，并在终端输出二维码；同时尝试将二维码图片保存到：
+
+```text
+/etc/anytls/anytls-qr.png
 ```
 
-## 连接信息
+二维码和连接链接中都包含客户端连接密码。虽然 `qr` 不再要求输入该密码，但仍要求 root 权限；请勿将终端输出、二维码图片或密码分享给未授权人员。也可以通过 `sudo anytls passwd` 生成新密码，脚本会更新服务配置并重启服务。
 
-安装完成或执行 `anytls qr` 后会输出连接信息，格式如下：
+服务端使用自签名证书，客户端需开启“允许不安全连接”或“跳过证书验证”。脚本生成的连接 URI 会包含 `insecure=1` 参数。
 
-```
-服务器 IP : 1.2.3.4
-端口      : 8443
-密码      : Abc12345xyz
-连接链接  : anytls://Abc12345xyz@1.2.3.4:8443/?insecure=1
-```
+二维码在服务器本地生成：Alpine 使用 Python 3 标准库内置生成器；其他发行版使用 `qrencode`，缺少时脚本会尝试安装。为获取连接 URI 中的服务器公网 IP，脚本会依次尝试访问 `ifconfig.me` 和 `ip.sb`；二维码内容本身不会上传到二维码生成服务。
 
-**客户端注意**：服务端使用自签名证书，客户端需开启“允许不安全连接”或“跳过证书验证”。
+## 服务与配置
 
-## 支持的客户端
+- 支持 `systemd` 和 `OpenRC`，根据系统环境生成对应服务定义。
+- AnyTLS-Go 服务端程序：`/usr/local/bin/anytls-server`
+- 管理命令：`/usr/local/bin/anytls` 和 `/usr/local/sbin/anytls`
+- 配置文件：`/etc/anytls/config.env`，权限为 `600`；配置目录权限为 `700`。
+- systemd 服务文件：`/etc/systemd/system/anytls.service`
+- OpenRC 服务脚本：`/etc/init.d/anytls`
+- 二维码图片：`/etc/anytls/anytls-qr.png`，生成后权限为 `600`。
 
-以下客户端已知支持 AnyTLS 协议，可与 anytls-go 服务端配合使用：
+## 防火墙与网络
 
-- **Shadowrocket**（iOS）：版本 `2.2.65` 及以上，可扫描本脚本生成的二维码
-- **NekoBox For Android**（Android）：版本 `1.3.8` 及以上，可扫描本脚本生成的二维码
-- **sing-box**（多平台）：基于 sing-box 内核的客户端通常支持 AnyTLS，可手动配置
-- **mihomo / Clash Meta**（多平台）：基于 mihomo 内核的客户端通常支持 AnyTLS，可手动配置
-
-## 目录与文件
-
-| 路径 | 说明 |
-| --- | --- |
-| `/usr/local/sbin/anytls` | 管理脚本本体 |
-| `/usr/local/bin/anytls` | 便于默认 `PATH` 查找的管理命令入口 |
-| `/usr/local/bin/anytls-server` | anytls-go 服务端程序 |
-| `/etc/anytls/config.env` | 配置文件（端口、密码、版本），权限 600 |
-| `/etc/systemd/system/anytls.service` | systemd 服务文件 |
-| `/etc/init.d/anytls` | OpenRC 服务文件（Alpine 等 OpenRC 系统） |
-| `/usr/local/libexec/anytls-runner` | OpenRC 启动器，从受限配置文件读取服务参数 |
-
-## 注意事项
-
-1. **云服务器安全组**：阿里云、腾讯云、AWS 等需在控制台安全组中手动放行所选端口（TCP），脚本只能处理系统本机防火墙。
-2. **密码安全**：密码保存在 `/etc/anytls/config.env` 中，目录权限为 700、配置文件权限为 600。systemd 通过 `EnvironmentFile` 读取配置，OpenRC 通过受限启动器读取配置，不会把密码写入服务定义文件。
-3. **密码限制**：为避免参数解析问题，密码仅允许字母和数字，长度 6–64 位。
-4. **版本更新**：`anytls update` 会按脚本内 `VERSION` 变量下载对应版本。如需升级，可修改脚本中的版本号后执行更新，或通过环境变量 `ANYTLS_VERSION` 指定版本。
-5. **下载文件名**：脚本按 `anytls_<版本>_linux_<架构>.zip` 的规则下载。若上游发布文件名有变化，需同步修改 `download_server` 函数。
-6. **服务参数**：服务端以 `-l 0.0.0.0:<端口> -p <密码>` 方式启动。若上游程序参数有变化，需修改 `write_unit` 函数生成的服务定义或 OpenRC 启动器。
-7. **首次使用建议**：请先在测试机上完整执行一次安装，确认服务能正常启动与连接。
+脚本会检测并尝试配置 UFW、firewalld 或 iptables；检测到活动 nftables 时会提示手动处理，不会改写现有 nftables 规则。云厂商安全组不受脚本管理，需要在服务商控制台单独放行所选 **TCP 端口**。
 
 ## 常见问题
 
-**服务启动失败？**
-执行 `sudo anytls log -n 200` 查看日志。常见原因包括端口被占用、程序参数与上游版本不一致、架构不匹配。
+### 安装后找不到 `anytls` 命令
 
-**客户端无法连接？**
-依次检查：`anytls status` 中服务是否为「运行中」；云安全组是否放行端口（TCP）；系统防火墙（`ufw status`、`firewall-cmd --list-ports` 或 Alpine 的 iptables 规则）是否放行；客户端是否开启了“允许不安全连接”。
+确认 `/usr/local/bin` 在当前 shell 的 `PATH` 中，或执行 `/usr/local/bin/anytls`。
 
-**忘记密码？**
-执行 `sudo cat /etc/anytls/config.env` 查看当前配置，或执行 `sudo anytls qr` 直接查看连接信息。二维码和连接链接包含客户端连接密码，请妥善保护终端输出与二维码图片。
+### 服务启动失败
 
-**如何修改端口或密码？**
-目前脚本未提供单独的端口修改命令。可编辑 `/etc/anytls/config.env` 中的 `PORT` 后，执行 `sudo anytls restart`。
+运行 `sudo anytls log -n 200` 查看日志，并确认监听端口未被占用、云安全组和系统防火墙已放行 TCP 端口。
 
-**如何彻底删除？**
-执行 `sudo anytls uninstall`，确认后会删除服务、程序、配置及管理脚本本体。
+### 客户端无法连接
 
-## 免责声明
+检查 `anytls status` 显示服务正在运行，核对服务器地址、端口和连接密码，并确认客户端允许跳过证书验证。
 
-本项目仅供学习和技术研究使用，请勿用于任何非法用途。使用者应自行承担风险，并遵守所在地区的法律法规。因使用本脚本产生的任何问题或纠纷，脚本作者概不负责。
+### 修改监听端口
 
-## 致谢
+目前没有独立的端口修改命令。修改 `/etc/anytls/config.env` 中的 `PORT` 后，重启服务：
 
-- [anytls/anytls-go](https://github.com/anytls/anytls-go)：AnyTLS-Go 服务端程序
+```bash
+sudo anytls restart
+```
+
+### 卸载
+
+执行 `sudo anytls uninstall`，并在提示时确认。卸载会删除服务定义、管理命令、服务端程序、配置和二维码文件。
